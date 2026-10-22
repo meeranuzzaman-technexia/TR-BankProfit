@@ -1,0 +1,1992 @@
+diff --git a/app/actions/extraction.ts b/app/actions/extraction.ts
+index 01f4d28ce10e125f9331ca050990a85a2f70dd41..d9185bf20135f921aeafe0c9995d512853436d8c 100644
+--- a/app/actions/extraction.ts
++++ b/app/actions/extraction.ts
+@@ -1,7 +1,7 @@
+ "use server";
+ 
+ import { isMyselfBusinessBankFlow } from "@/lib/tax/business-bank-categories";
+-import { ensurePensionStatementReviewFields, readReviewedPensionStatement, pensionProfileErrors } from "@/lib/tax/pension-statement-fields";
++import { ensurePensionStatementReviewFields, readPensionStatementFacts, pensionProfileErrors } from "@/lib/tax/pension-statement-fields";
+ import { invalidatePensionCalculation, invalidatePensionProfileFilings } from "@/lib/tax/pension-invalidation";
+ import { sumMoney } from "@/lib/money";
+ import { normalizeLedgerCategory } from "@/lib/tax/withholding-sources";
+@@ -115,7 +115,7 @@ Use this exact shape. Only the pension review-field instructions below may add t
+ For a bank statement, always return separate fields labelled exactly "Bank Name", "Account Label", "Account Number", "Currency", "IBAN", "Opening Balance", "Closing Balance", "Statement Period Start", and "Statement Period End". "IBAN" is the account's 24-character Pakistani IBAN (starts with PK) exactly as printed, often in the statement header; if no IBAN is printed return null, and never build one from the account number. Never combine the statement dates into one field: read the start and end dates from the statement header and return each as ISO YYYY-MM-DD. Extract every visible transaction row from the statement table. Do not include opening-balance or closing-balance marker rows as transactions; those balances belong in fields. Do not invent rows. Return transaction dates as ISO YYYY-MM-DD whenever possible. Keep descriptions and currency amounts exactly as shown in the document.
+ For a CNIC, always return separate fields labelled exactly "CNIC Number", "Name", "Father Name", "Date of Birth" and "Expiry Date", plus "Address" when the card prints one. Return "Date of Birth" and "Expiry Date" as ISO YYYY-MM-DD. Read the date of birth from the "Date of Birth" line only: never use the issue date or the expiry date for it, and never guess a date of birth that is not printed on the card. For "Expiry Date" return the card's own validity/expiry line ("Valid Upto", "Expiry", "Date of Expiry"), or null when the card prints none — never infer one from the issue date.
+ For a business balance sheet, use these exact separate field labels: ${Object.values(BUSINESS_BALANCE_LABELS).join(", ")}. Use PKR closing balances only when printed. Balance Sheet Date must be YYYY-MM-DD; do not infer Tax Year, currency, business identity, zero amounts, totals, or missing categories. Keep unknown values null. Never classify business bank balance as business cash. Never combine total assets with individual asset amounts. For other details preserve additional optional fields and notes.
+-For a pension statement, keep printed annual gross pension, annual medical allowance, annual net pension payable, actual annual pension tax deducted, Tax Year, Date of Birth and Pensioner CNIC as separate facts. Use exact labels "Gross Pension (Annual PKR)", "Medical Allowance (Annual PKR)", "Net Pension Payable (Annual PKR)", "Pension Tax Deducted (Annual PKR)", "Tax Year", "Date of Birth" and "Pensioner CNIC". Never confuse monthly and annual columns, gross and net, or deductions with tax chargeable. Never annualize a monthly number when no annual total is printed. Never infer missing tax deducted as zero. For "Approved Pension Amount for Tax (Annual PKR)", "Pension Withholding Already in Tax Ledger (Annual PKR)" and "Pension Tax Base Review Note", copy a value ONLY when the original document explicitly prints that separately labelled value. For each of these three fields, also include an extra string property "sourceEvidence" containing the exact printed field label followed by its exact printed value (a colon or newline may separate them); include the entire printed review-note paragraph, not a generated summary. These are unapproved suggestions only: the human must review and press Save & Approve Map before they become the tax source. Never infer, calculate or invent the approved tax base, allowance treatment, ledger overlap or review note from gross/net amounts, bank receipts or other figures. If the exact labelled value is not printed, is unclear or conflicts with another printed value, return null with confidence 0 and no sourceEvidence. An explicit printed 0 may be copied as a suggestion; missing is never 0. Do not claim that quoted text verifies any real TAX_PAYMENT ledger or proves human approval. Do not treat medical allowance as automatically taxable or exempt. Return printed dates as ISO YYYY-MM-DD; never overwrite the taxpayer profile from this document.
++For a pension statement, extract printed facts only: annual gross pension, annual medical allowance, annual net pension payable, actual annual pension tax deducted, Tax Year, Date of Birth and Pensioner CNIC as separate facts. Use exact labels "Gross Pension (Annual PKR)", "Medical Allowance (Annual PKR)", "Net Pension Payable (Annual PKR)", "Pension Tax Deducted (Annual PKR)", "Tax Year", "Date of Birth" and "Pensioner CNIC". Preserve other printed details as optional fields, including monthly pension, pensioner name, PPO number and reporting period. Use printed PKR amounts only; never convert foreign currency. If another currency is printed, preserve a separate Currency field and leave PKR amounts null for review. Never confuse monthly and annual columns, gross and net, or deductions with tax chargeable. Never annualize a monthly number when no annual total is printed. Return each canonical annual fact once; repeated identical totals are not separate fields. If printed totals conflict, return null and describe the conflict for human review rather than picking an amount. Never infer missing tax deducted as zero: return null with confidence 0 when it is not stated. Do not request, generate or add "Approved Pension Amount for Tax (Annual PKR)", "Pension Withholding Already in Tax Ledger (Annual PKR)" or "Pension Tax Base Review Note" as normal statement fields: they are conditional HUMAN/app decisions, not required PDF facts. For backward compatibility only, if the original file explicitly prints one of those separately labelled review values, it may be copied as unapproved suggestions with an extra string property "sourceEvidence" containing the exact printed label and exact printed value, including the entire printed review-note paragraph. Never infer, calculate or invent the approved tax base, allowance treatment, ledger overlap or review note from gross/net amounts or bank receipts. If no exact labelled review value is printed, omit that reviewer field; if it is unclear or conflicting, return null with confidence 0 and no sourceEvidence. An explicit printed 0 may be copied; missing is never 0. Quoted text does not verify any real TAX_PAYMENT ledger or prove human approval. Do not treat medical allowance as automatically taxable or exempt. Return printed dates as ISO YYYY-MM-DD; never overwrite the taxpayer profile from this document.
+ For a salary certificate, always return separate required fields labelled exactly "Gross Salary (Annual PKR)", "Tax Deducted u/s 149 (Annual PKR)", "Employer Name (as registered with FBR)" and "Tax Year". "Tax Year" is the four-digit tax year the certificate is for (for example 2026 for July 2025 to June 2026); when only the salary period is printed, the tax year is the year in which that period ends; return null when neither is printed. The employer name is the company's full legal name exactly as printed on the certificate letterhead or body (for example "ACME (PRIVATE) LIMITED"); return null when it is not printed. Return the employer NTN, when printed, as a separate optional field labelled "Employer NTN". Use annual amounts explicitly stated on the certificate. If a value is not stated or cannot be read, return null; never infer gross salary from net bank deposits and never assume missing tax withheld is zero. Also preserve other tax-relevant details as separate optional fields when printed, including employee name/ID, salary period, basic pay, allowances, bonuses, benefits/perquisites, exempt or taxable components, and net pay. Do not invent missing details, combine separate components, or annualize monthly amounts unless the certificate explicitly states the annual total.`;
+ 
+ type DocumentSlotRule = {
+@@ -631,6 +631,15 @@ export async function updateDocumentExtractionAction(
+         return { success: false, error: requiredErrors.join(" ") };
+     }
+ 
++    if (document.documentType === "pension_statement") {
++      const fields = (normalized.payload as { fields?: Array<{ value?: unknown }> } | null)?.fields;
++      if (Array.isArray(fields) && fields.some((field) => typeof field.value === "number" && !Number.isFinite(field.value))) {
++        // JSON would turn NaN/Infinity into null and could erase an invalid
++        // optional override. Keep incomplete drafts, but never silently coerce it.
++        return { success: false, error: "Pension fields cannot contain non-finite numbers. Correct the supplied amount before saving." };
++      }
++    }
++
+     const data = {
+       extractedData: JSON.stringify(normalized.payload),
+       extractionStatus: "COMPLETED",
+@@ -1471,13 +1480,13 @@ export async function approveAndMapExtractedDocumentAction(documentId: string) {
+           if (!["COMPLETED", "MAPPED"].includes(latest.extractionStatus)) throw new Error("Extract and review the pension statement before approval.");
+           const draft = await tx.filingDraft.findUnique({ where: { id: document.filingDraftId! }, select: { taxYear: true } });
+           if (!draft) throw new Error("Filing draft not found");
+-          const reviewed = readReviewedPensionStatement(latest.extractedData, draft.taxYear);
++          const reviewed = readPensionStatementFacts(latest.extractedData, draft.taxYear);
+           const profile = await tx.user.findUnique({ where: { id: document.userId }, select: { cnic: true, dateOfBirth: true } });
+           const identityErrors = pensionProfileErrors(reviewed, profile ?? {});
+           if (identityErrors.length) throw new Error(identityErrors.join(" · "));
+           const taxEntries = await tx.ledgerEntry.findMany({ where: { filingDraftId: document.filingDraftId!, userId: document.userId }, select: { entryType: true, category: true, amount: true } });
+           const taxLedger = sumMoney(taxEntries.filter(e => e.entryType === "EXPENSE" && normalizeLedgerCategory(e.category) === "TAX_PAYMENT").map(e => e.amount));
+-          if (reviewed.taxAlreadyInLedger > taxLedger) throw new Error("Pension withholding already in the tax ledger exceeds current TAX_PAYMENT entries.");
++          if (reviewed.taxAlreadyInLedger !== null && reviewed.taxAlreadyInLedger > taxLedger) throw new Error("Pension withholding already in the tax ledger exceeds current TAX_PAYMENT entries.");
+           await tx.document.update({ where: { id: document.id }, data: { extractionStatus: "MAPPED", extractionStartedAt: null } });
+           // No new income/cash-ledger row: bank receipts remain wealth evidence.
+           await invalidatePensionCalculation(tx, document.filingDraftId!, document.userId);
+diff --git a/app/actions/packet.ts b/app/actions/packet.ts
+index b88682ab95ad12805e7f6dfeef096f8f1c91b271..5b69f78919197b629584063dca47ad5de2f7fd17 100644
+--- a/app/actions/packet.ts
++++ b/app/actions/packet.ts
+@@ -158,7 +158,7 @@ function buildPacketPdf(snapshotJson: string) {
+       document.text(`Bank pension receipts (cash evidence only, not added again): ${money(pension.ledgerPension)}`);
+       document.text(`Actual pension tax deducted: ${money(pension.taxDeducted)}; already in tax ledger: ${money(pension.taxAlreadyInLedger)}`);
+       document.text(`Treatment: ${pension.treatment}; profile age bracket: ${pension.ageBracket}`);
+-      document.text(`Reviewer decision: ${pension.reviewNote}`);
++      document.text(pension.reviewNote ? `Reviewer decision: ${pension.reviewNote}` : "Basis: reviewed annual gross pension; no manual tax-base override.");
+       if (pension.treatment === "final_above_10m") {
+         document.text(`Existing app rules, before withholding/credits: base tax ${money(pension.baseTax)} + surcharge ${money(pension.surcharge)} = ${money(pension.taxDue)}. This is not independent legal certification.`);
+       }
+diff --git a/components/tax/filing/filing-wizard.tsx b/components/tax/filing/filing-wizard.tsx
+index 655c5da3bf96e1af7b821fa03b6d4ecfa631f9a2..39066fbdbc3b3a322c61e705a27ea4bedc634419 100644
+--- a/components/tax/filing/filing-wizard.tsx
++++ b/components/tax/filing/filing-wizard.tsx
+@@ -336,6 +336,7 @@ export function FilingWizard({
+     handleExtractDocument,
+     handleReviewDocument,
+     handleExtractedFieldChange,
++    handlePensionReviewFieldChange,
+     handleExtractedTransactionChange,
+     handleSaveDocumentReview,
+     handleMapDocument,
+@@ -2368,6 +2369,7 @@ export function FilingWizard({
+         handleExtractDocument={handleExtractDocument}
+         handleReviewDocument={handleReviewDocument}
+         handleExtractedFieldChange={handleExtractedFieldChange}
++        handlePensionReviewFieldChange={handlePensionReviewFieldChange}
+         handleExtractedTransactionChange={handleExtractedTransactionChange}
+         handleSaveDocumentReview={handleSaveDocumentReview}
+         handleMapDocument={handleMapDocument}
+diff --git a/components/tax/filing/hooks/use-filing-documents.ts b/components/tax/filing/hooks/use-filing-documents.ts
+index 7cf9d050952835d734762b6cdc1a1c4f15bad1e7..b432d4227a9c07f888ffab872267b065a74cd2ed 100644
+--- a/components/tax/filing/hooks/use-filing-documents.ts
++++ b/components/tax/filing/hooks/use-filing-documents.ts
+@@ -1,3 +1,4 @@
++import { PENSION_LABELS, pensionFieldKey, type PensionReviewDecisionKey } from "@/lib/tax/pension-statement-fields";
+ import { isBusinessPurchaseBasisField } from "@/lib/tax/business-schedule-fields";
+ import { useEffect, useRef, useState } from "react";
+ import {
+@@ -437,6 +438,7 @@ export function useFilingDocuments({
+     if (documentType === "pension_statement" && record.extractionStatus === "MAPPED") {
+       setDocumentRecords(previous => ({ ...previous, [documentType]: { ...record, extractionStatus: "COMPLETED" } }));
+       setProfileSyncNote("Unsaved pension changes: Save & Approve Map again before continuing. The previously approved source is not silently overwritten.");
++      resetDownstreamSteps(step, true);
+     }
+     if (
+       documentType === "business_books" &&
+@@ -491,6 +493,38 @@ export function useFilingDocuments({
+     });
+   }
+ 
++  function handlePensionReviewFieldChange(
++    documentType: string,
++    key: PensionReviewDecisionKey,
++    value: string,
++  ) {
++    if (documentType !== "pension_statement") return;
++    const record = documentRecords[documentType];
++    if (!record) return;
++    const fields = extractedByDocumentId[record.id]?.fields ?? [];
++    const index = fields.findIndex((field) => pensionFieldKey(field.label) === key);
++    if (index >= 0) {
++      handleExtractedFieldChange(documentType, index, value);
++      return;
++    }
++    if (record.extractionStatus === "MAPPED") {
++      setDocumentRecords(previous => ({ ...previous, [documentType]: { ...record, extractionStatus: "COMPLETED" } }));
++      setProfileSyncNote("Unsaved pension changes: Save & Approve Map again before continuing.");
++      resetDownstreamSteps(step, true);
++    }
++    setExtractedByDocumentId(previous => {
++      const payload = previous[record.id];
++      if (!payload) return previous;
++      // Functional updates avoid losing a field when two optional edits arrive together.
++      const current = payload.fields ?? [];
++      const exists = current.some(field => pensionFieldKey(field.label) === key);
++      const next = { label: PENSION_LABELS[key], value, confidence: 0, reviewSuggestion: false };
++      return { ...previous, [record.id]: { ...payload, fields: exists
++        ? current.map(field => pensionFieldKey(field.label) === key ? next : field)
++        : [...current, next] } };
++    });
++  }
++
+   function handleExtractedTransactionChange(
+     documentType: string,
+     transactionIndex: number,
+@@ -605,7 +639,7 @@ export function useFilingDocuments({
+     }
+ 
+     setProfileSyncNote(
+-      result.mapping === "PENSION" ? "Annual pension tax source approved. Recalculate Tax and generate/approve a fresh packet; bank cash receipts and profile DOB were not changed." : describeCnicProfilePlan(
++      result.mapping === "PENSION" ? "Pension statement facts approved. Recalculate Tax; unresolved withholding or tax-basis review will remain on hold. Generate a fresh packet after tax is ready. Bank cash receipts and profile DOB were not changed." : describeCnicProfilePlan(
+         (
+           result as {
+             profilePlan?: { filled?: string[]; skipped?: { field: string }[] };
+@@ -753,6 +787,7 @@ export function useFilingDocuments({
+     handleExtractDocument,
+     handleReviewDocument,
+     handleExtractedFieldChange,
++    handlePensionReviewFieldChange,
+     handleExtractedTransactionChange,
+     handleSaveDocumentReview,
+     handleMapDocument,
+diff --git a/components/tax/filing/wizard-documents-step.tsx b/components/tax/filing/wizard-documents-step.tsx
+index 95d6e77e5ec7b6d8c6a0366bf68cd8d5185f4f1d..8acd7cb0480d30dcbf75f970ede82a368bac1019 100644
+--- a/components/tax/filing/wizard-documents-step.tsx
++++ b/components/tax/filing/wizard-documents-step.tsx
+@@ -28,8 +28,9 @@ import {
+ import { getTaxYearDateInputBounds } from "@/lib/tax/tax-year-period";
+ import {
+   isPensionReviewDecisionField,
+-  pensionFieldKey,
++  type PensionReviewDecisionKey,
+ } from "@/lib/tax/pension-statement-fields";
++import { PensionTaxReviewPanel } from "@/components/tax/filing/pension-tax-review-panel";
+ import { isDocumentExtractionLeaseStale } from "@/lib/tax/document-extraction-state";
+ import {
+   getSalaryCertificateFieldKind,
+@@ -114,6 +115,11 @@ type WizardDocumentsStepProps = Readonly<{
+     fieldIndex: number,
+     value: string,
+   ) => void;
++  handlePensionReviewFieldChange?: (
++    documentType: string,
++    key: PensionReviewDecisionKey,
++    value: string,
++  ) => void;
+   handleExtractedTransactionChange: (
+     documentType: string,
+     transactionIndex: number,
+@@ -146,6 +152,7 @@ export function WizardDocumentsStep({
+   handleExtractDocument,
+   handleReviewDocument,
+   handleExtractedFieldChange,
++  handlePensionReviewFieldChange,
+   handleExtractedTransactionChange,
+   handleSaveDocumentReview,
+   handleMapDocument,
+@@ -513,7 +520,7 @@ export function WizardDocumentsStep({
+                       <p className="text-xs text-muted-foreground">
+                         {isMapped
+                           ? isPensionStatement
+-                            ? "Pension source is approved. Editing requires Save & Approve Map again, then a new tax calculation and packet. Changes are not applied until saved."
++                            ? "Pension statement facts are approved. Tax readiness is checked separately. Editing requires Save & Approve Map again, then a new tax calculation and packet. Changes are not applied until saved."
+                             : employersEditableAfterMap
+                             ? "This document is already mapped. The values below are read-only, except the employer names: change them and press Save employer."
+                             : purchaseBasisNeeded
+@@ -612,13 +619,13 @@ export function WizardDocumentsStep({
+                     <p className="mb-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
+                       {!isMapped && (
+                         <strong className="mb-1 block">
+-                          PDF values are suggestions, not approval. Check the printed review values and current tax ledger, then confirm with Save & Approve Map.
++                          PDF values are suggestions, not approval. Review the printed annual pension facts, then confirm with Save & Approve Map.
+                         </strong>
+                       )}
+                       Review annual gross pension separately from net receipts and medical allowances.
+-                      Enter the approved annual pension tax base and explain allowance treatment/differences from bank receipts.
+-                      Confirm actual pension tax deducted (0 only after verification), and how much of it is already in TAX_PAYMENT ledger rows (0 if none).
+-                      This approval updates the tax source, not cash income or profile DOB. Changes require a new calculation and packet.
++                      Only the annual gross amount and Tax Year are always required for this statement review.
++                      Missing tax deducted stays unknown; enter 0 only after verification. Reviewer decisions and ledger overlap are separate conditional checks, not required PDF fields.
++                      Approval confirms the facts, not final tax readiness, cash income or profile DOB. Changes require a new calculation and packet.
+                       Above-10M final-pension portal treatment currently requires manual review, not guessed auto-entry.
+                     </p>
+                   )}
+@@ -634,12 +641,9 @@ export function WizardDocumentsStep({
+                   {hasFields ? (
+                     <div className="grid gap-3 sm:grid-cols-2">
+                       {extracted.fields?.map((field, fieldIndex) => {
+-                        const isPensionReviewNote =
+-                          isPensionStatement && pensionFieldKey(field.label) === "reviewNote";
+-                        const isPdfReviewSuggestion =
+-                          isPensionStatement && !isMapped &&
+-                          isPensionReviewDecisionField(field.label) &&
+-                          field.reviewSuggestion === true;
++                        // Keep reviewer/app fields out of the printed-facts grid.
++                        // Their original indices are retained for other field edits.
++                        if (isPensionStatement && isPensionReviewDecisionField(field.label)) return null;
+                         const normalizedFieldLabel = field.label
+                           .toLowerCase()
+                           .replace(/[^a-z0-9]+/g, "_");
+@@ -764,9 +768,7 @@ export function WizardDocumentsStep({
+                         return (
+                           <label
+                             key={`${field.label}-${fieldIndex}`}
+-                            className={
+-                              isPensionReviewNote ? "grid gap-1 sm:col-span-2" : "grid gap-1"
+-                            }
++                            className="grid gap-1"
+                           >
+                             <span className="text-xs font-medium text-muted-foreground">
+                               {field.label}
+@@ -779,105 +781,80 @@ export function WizardDocumentsStep({
+                                   · Required
+                                 </span>
+                               )}
+-                              {isPdfReviewSuggestion ? (
+-                                <span className="ml-1 text-amber-700">
+-                                  · PDF suggestion — approval required
+-                                </span>
+-                              ) : typeof field.confidence === "number" &&
++                              {field.value !== null &&
++                                field.value !== undefined &&
++                                String(field.value).trim() !== "" &&
++                                typeof field.confidence === "number" &&
+                                 field.confidence > 0 &&
+                                 ` · ${Math.round(field.confidence * 100)}% confidence`}
+                             </span>
+-                            {isPensionReviewNote ? (
+-                              <textarea
+-                                rows={4}
+-                                required
+-                                aria-required="true"
+-                                value={displayValue}
+-                                onChange={(event) =>
+-                                  handleExtractedFieldChange(slotKey, fieldIndex, event.target.value)
+-                                }
+-                                className="min-h-28 rounded-lg border bg-background px-3 py-2 text-sm"
+-                              />
+-                            ) : (
+-                              <input
+-                                type={isDateField ? "date" : "text"}
+-                                min={
+-                                  isStatementDateField
+-                                    ? taxYearBounds.min
+-                                    : undefined
+-                                }
+-                                max={
+-                                  isStatementDateField
+-                                    ? taxYearBounds.max
+-                                    : undefined
+-                                }
+-                                inputMode={isCnicField ? "numeric" : undefined}
+-                                required={isDocumentReviewRequiredField(
+-                                  slot.documentType,
+-                                  field.label,
+-                                  extracted?.fields,
+-                                )}
+-                                aria-required={isDocumentReviewRequiredField(
+-                                  slot.documentType,
+-                                  field.label,
+-                                  extracted?.fields,
+-                                )}
+-                                aria-invalid={Boolean(
+-                                  isBankStatement &&
+-                                  isBankStatementIbanLabel(field.label) &&
+-                                  ibanProblem,
+-                                )}
+-                                placeholder={
+-                                  isBankStatement &&
+-                                  isBankStatementIbanLabel(field.label)
+-                                    ? "PK36SCBL0000001123456702"
++                            <input
++                              type={isDateField ? "date" : "text"}
++                              min={
++                                isStatementDateField
++                                  ? taxYearBounds.min
++                                  : undefined
++                              }
++                              max={
++                                isStatementDateField
++                                  ? taxYearBounds.max
++                                  : undefined
++                              }
++                              inputMode={isCnicField ? "numeric" : undefined}
++                              required={isDocumentReviewRequiredField(
++                                slot.documentType,
++                                field.label,
++                                extracted?.fields,
++                              )}
++                              aria-required={isDocumentReviewRequiredField(
++                                slot.documentType,
++                                field.label,
++                                extracted?.fields,
++                              )}
++                              aria-invalid={Boolean(
++                                isBankStatement &&
++                                isBankStatementIbanLabel(field.label) &&
++                                ibanProblem,
++                              )}
++                              placeholder={
++                                isBankStatement &&
++                                isBankStatementIbanLabel(field.label)
++                                  ? "PK36SCBL0000001123456702"
++                                  : undefined
++                              }
++                              maxLength={
++                                isBankStatement &&
++                                isBankStatementIbanLabel(field.label)
++                                  ? 24
++                                  : isCnicField
++                                    ? 15
+                                     : undefined
+-                                }
+-                                maxLength={
+-                                  isBankStatement &&
++                              }
++                              value={displayValue}
++                              onChange={(event) =>
++                                handleExtractedFieldChange(
++                                  slotKey,
++                                  fieldIndex,
++                                  event.target.value,
++                                )
++                              }
++                              readOnly={
++                                isMapped && !isPensionStatement &&
++                                !(
++                                  ibanEditableAfterMap &&
+                                   isBankStatementIbanLabel(field.label)
+-                                    ? 24
+-                                    : isCnicField
+-                                      ? 15
+-                                      : undefined
+-                                }
+-                                value={displayValue}
+-                                onChange={(event) =>
+-                                  handleExtractedFieldChange(
+-                                    slotKey,
+-                                    fieldIndex,
+-                                    event.target.value,
+-                                  )
+-                                }
+-                                readOnly={
+-                                  isMapped && !isPensionStatement &&
+-                                  !(
+-                                    ibanEditableAfterMap &&
+-                                    isBankStatementIbanLabel(field.label)
+-                                  ) &&
+-                                  !(
+-                                    employersEditableAfterMap &&
+-                                    ["employer_name", "other_employers"].includes(
+-                                      getSalaryCertificateFieldKind(
+-                                        field.label,
+-                                      ) ?? "",
+-                                    )
++                                ) &&
++                                !(
++                                  employersEditableAfterMap &&
++                                  ["employer_name", "other_employers"].includes(
++                                    getSalaryCertificateFieldKind(
++                                      field.label,
++                                    ) ?? "",
+                                   )
+-                                }
+-                                className="h-9 rounded-lg border bg-background px-3 text-sm"
+-                              />
+-                            )}
+-                            {isPdfReviewSuggestion &&
+-                              typeof field.sourceEvidence === "string" && (
+-                                <details className="text-xs text-muted-foreground">
+-                                  <summary className="cursor-pointer">
+-                                    Quoted PDF text — verify against the original
+-                                  </summary>
+-                                  <p className="mt-1 whitespace-pre-wrap break-words">
+-                                    {field.sourceEvidence}
+-                                  </p>
+-                                </details>
+-                              )}
++                                )
++                              }
++                              className="h-9 rounded-lg border bg-background px-3 text-sm"
++                            />
+                           </label>
+                         );
+                       })}
+@@ -889,6 +866,14 @@ export function WizardDocumentsStep({
+                     </p>
+                   )}
+ 
++                  {isPensionStatement && hasFields && (
++                    <PensionTaxReviewPanel
++                      fields={extracted.fields ?? []}
++                      approved={isMapped}
++                      onChange={(key, value) => handlePensionReviewFieldChange?.(slotKey, key, value)}
++                    />
++                  )}
++
+                   {hasFields && inlineRequiredErrors.length > 0 && (
+                     <div
+                       role="alert"
+diff --git a/lib/tax/document-review-required.ts b/lib/tax/document-review-required.ts
+index 8c45fdb78572e80effb501e760ae9b4c26a71981..fa797114e1b4d17e6072f2f8d217bf17c1f7ad90 100644
+--- a/lib/tax/document-review-required.ts
++++ b/lib/tax/document-review-required.ts
+@@ -139,7 +139,7 @@ export function isDocumentReviewRequiredField(
+     businessPurchaseBasisRequired(fields)
+   )
+     return true;
+-  if (documentType === "pension_statement") return isPensionStatementRequiredField(label);
++  if (documentType === "pension_statement") return isPensionStatementRequiredField(label, fields);
+   return documentType === "salary_certificate"
+     ? isSalaryCertificateRequiredField(String(label ?? ""))
+     : Boolean(documentReviewFieldRequirement(documentType, label));
+diff --git a/lib/tax/pension-source.ts b/lib/tax/pension-source.ts
+index bcb4883abd3f653483fd8918e99fb4b7d9340aee..0297cf91b08cbd12bf39ffda207388b953713c47 100644
+--- a/lib/tax/pension-source.ts
++++ b/lib/tax/pension-source.ts
+@@ -53,6 +53,7 @@ export function resolveApprovedPensionSource(input: {
+   const statement = readReviewedPensionStatement(
+     doc.extractedData,
+     input.taxYear,
++    { ledgerTaxWithheld: input.ledgerTaxWithheld },
+   );
+   const errors = pensionProfileErrors(statement, input.profile);
+   if (statement.taxAlreadyInLedger > input.ledgerTaxWithheld)
+@@ -91,6 +92,7 @@ export function resolveApprovedPensionSource(input: {
+     .update(
+       JSON.stringify({
+         version: PENSION_SOURCE_VERSION,
++        reviewPolicy: "pension-review-v2-conditional-note",
+         documentId: doc.id,
+         extractedData: doc.extractedData,
+         taxYear: input.taxYear,
+diff --git a/lib/tax/pension-statement-fields.ts b/lib/tax/pension-statement-fields.ts
+index 01f05d8984ac096fbbddb3117d8f0e92207d58a7..3a79aea353b0d199aa586dbe8115b36c86f23f2b 100644
+--- a/lib/tax/pension-statement-fields.ts
++++ b/lib/tax/pension-statement-fields.ts
+@@ -1,6 +1,6 @@
+ import { parseTaxpayerDateOfBirth } from "./taxpayer-age";
+ 
+-/** Printed facts and an explicit HUMAN tax-base decision; never infer it from net pay. */
++/** Printed facts are distinct from conditional, human-only tax review decisions. */
+ export const PENSION_LABELS = {
+   taxYear: "Tax Year",
+   grossAnnual: "Gross Pension (Annual PKR)",
+@@ -12,125 +12,107 @@ export const PENSION_LABELS = {
+   netAnnual: "Net Pension Payable (Annual PKR)",
+   dateOfBirth: "Date of Birth",
+   cnic: "Pensioner CNIC",
++  currency: "Currency",
+ } as const;
+ type Key = keyof typeof PENSION_LABELS;
++export type PensionReviewDecisionKey = "approvedAnnual" | "taxAlreadyInLedger" | "reviewNote";
+ export type PensionField = {
+   label?: unknown;
+   value?: unknown;
+   confidence?: unknown;
+-  /** Model quotation of the printed label and value, not independent verification. */
++  /** A model quotation is not independent verification or human approval. */
+   sourceEvidence?: unknown;
+   reviewSuggestion?: boolean;
+ };
+-const reviewDecisionKeys: Key[] = [
+-  "approvedAnnual",
+-  "taxAlreadyInLedger",
+-  "reviewNote",
+-];
+-const required: Key[] = [
+-  "taxYear",
+-  "grossAnnual",
+-  "approvedAnnual",
+-  "taxDeducted",
+-  "taxAlreadyInLedger",
+-  "reviewNote",
+-];
++const reviewDecisionKeys: Key[] = ["approvedAnnual", "taxAlreadyInLedger", "reviewNote"];
++// These are the only unconditional annual-statement requirements. Unknown
++// withholding and conditional tax-basis review are checked separately at tax time.
++const required: Key[] = ["taxYear", "grossAnnual"];
+ const norm = (v: unknown) =>
+-  String(v ?? "")
+-    .trim()
+-    .toLowerCase()
+-    .replace(/[^a-z0-9]+/g, "_")
+-    .replace(/^_|_$/g, "");
++  String(v ?? "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_|_$/g, "");
+ const aliases: Partial<Record<Key, string[]>> = {
+-  grossAnnual: [
+-    "Gross Annual Pension",
+-    "Annual Gross Pension",
+-    "Gross Pension Annual",
+-  ],
++  grossAnnual: ["Gross Annual Pension", "Annual Gross Pension", "Gross Pension Annual"],
+   medicalAnnual: ["Annual Medical Allowance"],
+   netAnnual: ["Annual Net Pension Payable", "Net Annual Pension Payable"],
+-  taxDeducted: [
+-    "Tax Deducted on Pension (Annual PKR)",
+-    "Pension Tax Withheld (Annual PKR)",
+-  ],
++  taxDeducted: ["Tax Deducted on Pension (Annual PKR)", "Pension Tax Withheld (Annual PKR)"],
+   dateOfBirth: ["DOB", "Birth Date"],
+   cnic: ["CNIC Number", "CNIC No", "CNIC"],
+ };
+ export function pensionFieldKey(label: unknown): Key | null {
+   const n = norm(label);
+-  // A monthly or net field is never an alias for the annual gross/approved base.
+-  return (
+-    (Object.keys(PENSION_LABELS) as Key[]).find((key) =>
+-      [PENSION_LABELS[key], ...(aliases[key] ?? [])].some(
+-        (value) => norm(value) === n,
+-      ),
+-    ) ?? null
+-  );
++  // Monthly/net pension is never an alias for annual gross or the tax basis.
++  return (Object.keys(PENSION_LABELS) as Key[]).find((key) =>
++    [PENSION_LABELS[key], ...(aliases[key] ?? [])].some((value) => norm(value) === n),
++  ) ?? null;
+ }
+-export function isPensionStatementRequiredField(label: unknown) {
++export function pensionFieldValue(fields: PensionField[] | undefined, key: Key) {
++  return (fields ?? []).find((field) => pensionFieldKey(field.label) === key)?.value;
++}
++const isBlank = (value: unknown) => value === null || value === undefined || (typeof value === "string" && value.trim() === "");
++
++/** Material source ambiguity must be reviewed, never resolved from net receipts. */
++export function pensionTaxBasisNeedsReview(fields: PensionField[] | undefined) {
++  const gross = parsePensionAmount(pensionFieldValue(fields, "grossAnnual"));
++  const medical = parsePensionAmount(pensionFieldValue(fields, "medicalAnnual"));
++  const net = parsePensionAmount(pensionFieldValue(fields, "netAnnual"));
++  const deducted = parsePensionAmount(pensionFieldValue(fields, "taxDeducted"));
++  const exceedsStatedComponents = gross !== null && net !== null &&
++    Math.round(net * 100) > Math.round((gross + (medical ?? 0) - (deducted ?? 0)) * 100);
++  return (medical !== null && medical > 0) || exceedsStatedComponents;
++}
++
++export function pensionReviewNoteRequired(fields: PensionField[] | undefined) {
++  const approved = pensionFieldValue(fields, "approvedAnnual");
++  if (isBlank(approved)) return false;
++  const gross = parsePensionAmount(pensionFieldValue(fields, "grossAnnual"));
++  // An ordinary confirmed gross basis needs no essay. A changed basis or an
++  // explicit decision involving a non-zero allowance still needs an audit reason.
++  return parsePensionAmount(approved) !== gross || pensionTaxBasisNeedsReview(fields);
++}
++export function isPensionStatementRequiredField(label: unknown, fields?: PensionField[]) {
+   const key = pensionFieldKey(label);
+-  return key !== null && required.includes(key);
++  return key !== null && (required.includes(key) || (key === "reviewNote" && pensionReviewNoteRequired(fields)));
+ }
+ export function isPensionReviewDecisionField(label: unknown) {
+   const key = pensionFieldKey(label);
+   return key !== null && reviewDecisionKeys.includes(key);
+ }
+ 
+-/**
+- * Accept only a matching label/value quotation as a UI suggestion. A model
+- * quotation is NOT proof of the original file or human approval: only the
+- * explicit review action may move the owned document from COMPLETED to MAPPED.
+- */
++/** Preserve legacy, exactly quoted suggestions, but never infer reviewer decisions. */
+ function hasPrintedPensionReviewSuggestion(field: PensionField, key: Key) {
+   if (typeof field.sourceEvidence !== "string") return false;
+   const squash = (value: string) => value.replace(/\s+/g, " ").trim();
+   const quote = squash(field.sourceEvidence);
+   const label = PENSION_LABELS[key];
+   if (!quote.toLowerCase().startsWith(label.toLowerCase())) return false;
+-  const printed = quote
+-    .slice(label.length)
+-    .replace(/^\s*[:|]\s*/, "")
+-    .trim();
++  const printed = quote.slice(label.length).replace(/^\s*[:|]\s*/, "").trim();
+   if (key === "reviewNote") {
+-    return (
+-      typeof field.value === "string" &&
+-      field.value.trim().length >= 5 &&
+-      squash(field.value) === printed
+-    );
++    return typeof field.value === "string" && field.value.trim().length >= 5 && squash(field.value) === printed;
+   }
+   const amount = parsePensionAmount(field.value);
+   const printedAmount = parsePensionAmount(printed);
+-  return (
+-    amount !== null &&
+-    printedAmount !== null &&
+-    (key !== "approvedAnnual" || amount > 0) &&
+-    amount === printedAmount
+-  );
++  return amount !== null && printedAmount !== null && (key !== "approvedAnnual" || amount > 0) && amount === printedAmount;
+ }
+ 
+-export function ensurePensionStatementReviewFields(
+-  raw: unknown,
+-  fromModel = false,
+-): unknown {
++export function ensurePensionStatementReviewFields(raw: unknown, fromModel = false): unknown {
+   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return raw;
+   const p = raw as Record<string, unknown>;
+   const fields: PensionField[] = Array.isArray(p.fields)
+-    ? p.fields
+-        .filter((f) => f && typeof f === "object" && !Array.isArray(f))
+-        .map((f) => ({ ...f }))
++    ? p.fields.filter((f) => f && typeof f === "object" && !Array.isArray(f)).map((f) => ({ ...f }))
+     : [];
+-  for (const key of required) {
+-    if (!fields.some((f) => pensionFieldKey(f.label) === key))
++  // A missing deduction gets an optional, explicitly unknown fact so the user
++  // can supply separately verified withholding. No app-only blank fields added.
++  for (const key of [...required, "taxDeducted"] as Key[]) {
++    if (!fields.some((f) => pensionFieldKey(f.label) === key)) {
+       fields.push({ label: PENSION_LABELS[key], value: null, confidence: 0 });
++    }
+   }
+   for (const field of fields) {
++    if (isBlank(field.value)) field.confidence = 0;
+     const key = pensionFieldKey(field.label);
+     if (key === null || !reviewDecisionKeys.includes(key)) continue;
+-    const suggestion =
+-      fields.filter((candidate) => pensionFieldKey(candidate.label) === key)
+-        .length === 1 && hasPrintedPensionReviewSuggestion(field, key);
++    const suggestion = fields.filter((candidate) => pensionFieldKey(candidate.label) === key).length === 1 && hasPrintedPensionReviewSuggestion(field, key);
+     if (fromModel) {
+-      // A printed decision may prefill the form, but never pre-approve its source.
+       field.reviewSuggestion = suggestion;
+       if (!suggestion) {
+         field.value = null;
+@@ -138,7 +120,6 @@ export function ensurePensionStatementReviewFields(
+         delete field.sourceEvidence;
+       }
+     } else if (field.reviewSuggestion === true && !suggestion) {
+-      // Human edits are retained; do not mislabel them as the old PDF quotation.
+       field.reviewSuggestion = false;
+       field.confidence = 0;
+       delete field.sourceEvidence;
+@@ -148,152 +129,162 @@ export function ensurePensionStatementReviewFields(
+ }
+ export function parsePensionAmount(value: unknown): number | null {
+   if (typeof value !== "number" && typeof value !== "string") return null;
+-  const text = String(value)
+-    .trim()
+-    .replace(/^(PKR|Rs\.?)\s*/i, "");
++  const text = String(value).trim().replace(/^(PKR|Rs\.?)\s*/i, "");
+   if (!/^(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d{1,2})?$/.test(text)) return null;
+   const number = Number(text.replace(/,/g, ""));
+-  return Number.isFinite(number) &&
+-    number >= 0 &&
+-    Number.isSafeInteger(Math.round(number * 100))
+-    ? number
+-    : null;
+-}
+-function fieldValue(fields: PensionField[], key: Key) {
+-  return fields.find((f) => pensionFieldKey(f.label) === key)?.value;
++  return Number.isFinite(number) && number >= 0 && Number.isSafeInteger(Math.round(number * 100)) ? number : null;
+ }
+-export function getPensionStatementReviewErrors(
+-  fields: PensionField[] | undefined,
+-  taxYear?: number,
+-): string[] {
++
++/** Document approval validates printed facts, not an invented tax/ledger decision. */
++export function getPensionStatementReviewErrors(fields: PensionField[] | undefined, taxYear?: number): string[] {
+   const all = fields ?? [];
+   const errors: string[] = [];
+   for (const key of Object.keys(PENSION_LABELS) as Key[]) {
+     const matches = all.filter((f) => pensionFieldKey(f.label) === key);
+     if (matches.length > 1) {
+-      errors.push(
+-        `${PENSION_LABELS[key]}: duplicate fields; review the extraction.`,
+-      );
++      errors.push(`${PENSION_LABELS[key]}: duplicate fields; review the extraction.`);
+       continue;
+     }
+     const v = matches[0]?.value;
+-    const blank = v === null || v === undefined || String(v).trim() === "";
+-    if (blank) {
+-      if (required.includes(key))
+-        errors.push(
+-          `${PENSION_LABELS[key]} is required. Review the original records; do not assume a missing amount is zero.`,
+-        );
++    if (isBlank(v)) {
++      if (required.includes(key)) {
++        errors.push(`${PENSION_LABELS[key]} is required. Review the original annual statement.`);
++      }
+       continue;
+     }
+     if (key === "taxYear") {
+-      if (
+-        !/^\d{4}$/.test(String(v).trim()) ||
+-        (taxYear !== undefined && Number(v) !== taxYear)
+-      )
+-        errors.push(
+-          `Pension Tax Year must be ${taxYear ?? "a four-digit year"}.`,
+-        );
++      if (!/^\d{4}$/.test(String(v).trim()) || (taxYear !== undefined && Number(v) !== taxYear)) {
++        errors.push(`Pension Tax Year must be ${taxYear ?? "a four-digit year"}.`);
++      }
+     } else if (key === "reviewNote") {
+-      if (typeof v !== "string" || v.trim().length < 5)
+-        errors.push(
+-          "Explain the approved pension tax base, allowance treatment and any difference from bank receipts in the Pension Tax Base Review Note.",
+-        );
++      if (typeof v !== "string") errors.push("Pension Tax Base Review Note must be text.");
++    } else if (key === "currency") {
++      if (typeof v !== "string" || v.trim().toUpperCase() !== "PKR") {
++        errors.push("Pension statement currency must be PKR; foreign amounts must not be relabelled or converted automatically.");
++      }
+     } else if (key === "dateOfBirth") {
+-      if (!parseTaxpayerDateOfBirth(v))
+-        errors.push("Pension Date of Birth must be a valid date.");
++      if (!parseTaxpayerDateOfBirth(v)) errors.push("Pension Date of Birth must be a valid date.");
+     } else if (key === "cnic") {
+-      if (
+-        !/^[\d\s-]+$/.test(String(v)) ||
+-        String(v).replace(/\D/g, "").length !== 13
+-      )
++      if (!/^[\d\s-]+$/.test(String(v)) || String(v).replace(/\D/g, "").length !== 13) {
+         errors.push("Pensioner CNIC must contain exactly 13 digits.");
++      }
+     } else {
+       const n = parsePensionAmount(v);
+-      if (
+-        n === null ||
+-        (["grossAnnual", "approvedAnnual"].includes(key) && n <= 0)
+-      )
+-        errors.push(
+-          `${PENSION_LABELS[key]}: enter a valid ${["grossAnnual", "approvedAnnual"].includes(key) ? "positive " : "non-negative "}annual PKR amount (at most two decimal places).`,
+-        );
++      if (n === null || (["grossAnnual", "approvedAnnual"].includes(key) && n <= 0)) {
++        errors.push(`${PENSION_LABELS[key]}: enter a valid ${["grossAnnual", "approvedAnnual"].includes(key) ? "positive " : "non-negative "}annual PKR amount (at most two decimal places).`);
++      }
++    }
++  }
++  if (pensionReviewNoteRequired(all)) {
++    const note = pensionFieldValue(all, "reviewNote");
++    if (typeof note !== "string" || note.trim().length < 5) {
++      errors.push("Pension Tax Base Review Note is required only for this manual tax-base override, allowance decision or source discrepancy. Explain the reviewed treatment (at least five characters).");
+     }
+   }
+-  const deducted = parsePensionAmount(fieldValue(all, "taxDeducted"));
+-  const covered = parsePensionAmount(fieldValue(all, "taxAlreadyInLedger"));
+-  if (deducted !== null && covered !== null && covered > deducted)
+-    errors.push(
+-      "Pension withholding already in the tax ledger cannot exceed pension tax deducted.",
+-    );
++  const deducted = parsePensionAmount(pensionFieldValue(all, "taxDeducted"));
++  const covered = parsePensionAmount(pensionFieldValue(all, "taxAlreadyInLedger"));
++  if (deducted !== null && covered !== null && covered > deducted) {
++    errors.push("Pension withholding already in the tax ledger cannot exceed pension tax deducted.");
++  }
+   return errors;
+ }
+-export type ReviewedPensionStatement = {
++
++/** Tax readiness is stricter than statement review: no missing-as-zero credits. */
++export function getPensionTaxReadinessErrors(fields: PensionField[] | undefined, ledgerTaxWithheld?: number): string[] {
++  const errors: string[] = [];
++  const medical = parsePensionAmount(pensionFieldValue(fields, "medicalAnnual"));
++  if (isBlank(pensionFieldValue(fields, "approvedAnnual")) && pensionTaxBasisNeedsReview(fields)) {
++    errors.push(medical !== null && medical > 0
++      ? "Review the Approved Pension Amount for Tax and allowance treatment before calculating: a non-zero medical allowance is printed. It is not automatically included or excluded; net receipts are not the tax basis."
++      : "Review the Approved Pension Amount for Tax: net receipts exceed the stated gross/allowance/withholding components. Verify the source discrepancy and explain the basis; do not guess from net receipts.");
++  }
++  const deducted = parsePensionAmount(pensionFieldValue(fields, "taxDeducted"));
++  if (deducted === null) {
++    errors.push("Pension Tax Deducted (Annual PKR) is not stated. Confirm the actual deduction before final tax calculation; enter 0 only after verification. Unknown withholding is not zero.");
++  } else if (deducted > 0 && isBlank(pensionFieldValue(fields, "taxAlreadyInLedger")) && ledgerTaxWithheld !== 0) {
++    errors.push("Confirm Pension Withholding Already in Tax Ledger before calculating when existing tax entries may overlap. Link/review the actual pension deduction; do not allocate unrelated TAX_PAYMENT entries by guessing.");
++  }
++  return errors;
++}
++export type PensionStatementFacts = {
+   taxYear: number;
+   grossAnnual: number;
+   medicalAnnual: number | null;
+   netAnnual: number | null;
+-  approvedAnnual: number;
+-  taxDeducted: number;
+-  taxAlreadyInLedger: number;
++  approvedAnnual: number | null;
++  taxDeducted: number | null;
++  taxAlreadyInLedger: number | null;
+   reviewNote: string;
+   dateOfBirth: string | null;
+   cnic: string | null;
+ };
+-export function readReviewedPensionStatement(
+-  raw: unknown,
+-  taxYear: number,
+-): ReviewedPensionStatement {
++export type ReviewedPensionStatement = Omit<PensionStatementFacts, "approvedAnnual" | "taxDeducted" | "taxAlreadyInLedger"> & {
++  approvedAnnual: number;
++  taxDeducted: number;
++  taxAlreadyInLedger: number;
++};
++function pensionFieldsFromPayload(raw: unknown): PensionField[] {
+   let p: unknown;
+   try {
+     p = typeof raw === "string" ? JSON.parse(raw) : raw;
+   } catch {
+-    throw new Error(
+-      "Pension statement has invalid extracted data; review and approve it again.",
+-    );
++    throw new Error("Pension statement has invalid extracted data; review and approve it again.");
+   }
+-  const fields =
+-    p &&
+-    typeof p === "object" &&
+-    Array.isArray((p as { fields?: unknown }).fields)
+-      ? (p as { fields: PensionField[] }).fields.filter(
+-          (f) => f && typeof f === "object",
+-        )
+-      : [];
++  return p && typeof p === "object" && Array.isArray((p as { fields?: unknown }).fields)
++    ? (p as { fields: PensionField[] }).fields.filter((f) => f && typeof f === "object")
++    : [];
++}
++export function readPensionStatementFacts(raw: unknown, taxYear: number): PensionStatementFacts {
++  const fields = pensionFieldsFromPayload(raw);
+   const errors = getPensionStatementReviewErrors(fields, taxYear);
+   if (errors.length) throw new Error(errors.join(" · "));
+-  const dob = parseTaxpayerDateOfBirth(fieldValue(fields, "dateOfBirth"));
+-  const cnic = String(fieldValue(fields, "cnic") ?? "").replace(/\D/g, "");
++  const gross = parsePensionAmount(pensionFieldValue(fields, "grossAnnual"))!;
++  const medical = parsePensionAmount(pensionFieldValue(fields, "medicalAnnual"));
++  const explicitAnnual = parsePensionAmount(pensionFieldValue(fields, "approvedAnnual"));
++  const deducted = parsePensionAmount(pensionFieldValue(fields, "taxDeducted"));
++  const covered = parsePensionAmount(pensionFieldValue(fields, "taxAlreadyInLedger"));
++  const dob = parseTaxpayerDateOfBirth(pensionFieldValue(fields, "dateOfBirth"));
++  const cnic = String(pensionFieldValue(fields, "cnic") ?? "").replace(/\D/g, "");
+   return {
+     taxYear,
+-    grossAnnual: parsePensionAmount(fieldValue(fields, "grossAnnual"))!,
+-    medicalAnnual: parsePensionAmount(fieldValue(fields, "medicalAnnual")),
+-    netAnnual: parsePensionAmount(fieldValue(fields, "netAnnual")),
+-    approvedAnnual: parsePensionAmount(fieldValue(fields, "approvedAnnual"))!,
+-    taxDeducted: parsePensionAmount(fieldValue(fields, "taxDeducted"))!,
+-    taxAlreadyInLedger: parsePensionAmount(
+-      fieldValue(fields, "taxAlreadyInLedger"),
+-    )!,
+-    reviewNote: String(fieldValue(fields, "reviewNote")).trim(),
++    grossAnnual: gross,
++    medicalAnnual: medical,
++    netAnnual: parsePensionAmount(pensionFieldValue(fields, "netAnnual")),
++    // A plain reviewed gross-pension statement needs no duplicate amount entry.
++    // A separate nonzero allowance/material mismatch needs a human decision instead.
++    approvedAnnual: explicitAnnual ?? (pensionTaxBasisNeedsReview(fields) ? null : gross),
++    taxDeducted: deducted,
++    taxAlreadyInLedger: covered ?? (deducted === 0 ? 0 : null),
++    reviewNote: String(pensionFieldValue(fields, "reviewNote") ?? "").trim(),
+     dateOfBirth: dob?.toISOString().slice(0, 10) ?? null,
+     cnic: cnic || null,
+   };
+ }
++/** Only this stricter reader may supply a calculation/packet source. */
++export function readReviewedPensionStatement(raw: unknown, taxYear: number, context: { ledgerTaxWithheld?: number } = {}): ReviewedPensionStatement {
++  const facts = readPensionStatementFacts(raw, taxYear);
++  const errors = getPensionTaxReadinessErrors(pensionFieldsFromPayload(raw), context.ledgerTaxWithheld);
++  if (errors.length) throw new Error(errors.join(" · "));
++  return {
++    ...facts,
++    approvedAnnual: facts.approvedAnnual!,
++    taxDeducted: facts.taxDeducted!,
++    // Safe only because known nil deduction or a checked empty current tax ledger
++    // cannot overlap. Otherwise readiness requires a reviewed allocation.
++    taxAlreadyInLedger: facts.taxAlreadyInLedger ?? 0,
++  };
++}
+ export function pensionProfileErrors(
+-  statement: ReviewedPensionStatement,
++  statement: Pick<PensionStatementFacts, "dateOfBirth" | "cnic">,
+   profile: { dateOfBirth?: Date | null; cnic?: string | null },
+ ) {
+   const errors: string[] = [];
+-  if (
+-    statement.dateOfBirth &&
+-    profile.dateOfBirth &&
+-    statement.dateOfBirth !== profile.dateOfBirth.toISOString().slice(0, 10)
+-  )
+-    errors.push(
+-      "Pension statement DOB differs from the taxpayer profile/CNIC. Correct the source/profile before calculating; the statement must not overwrite identity automatically.",
+-    );
++  if (statement.dateOfBirth && profile.dateOfBirth && statement.dateOfBirth !== profile.dateOfBirth.toISOString().slice(0, 10)) {
++    errors.push("Pension statement DOB differs from the taxpayer profile/CNIC. Correct the source/profile before calculating; the statement must not overwrite identity automatically.");
++  }
+   const profileCnic = String(profile.cnic ?? "").replace(/\D/g, "");
+-  if (statement.cnic && profileCnic && statement.cnic !== profileCnic)
+-    errors.push(
+-      "Pension statement CNIC differs from the taxpayer profile. Use a statement for this taxpayer.",
+-    );
++  if (statement.cnic && profileCnic && statement.cnic !== profileCnic) {
++    errors.push("Pension statement CNIC differs from the taxpayer profile. Use a statement for this taxpayer.");
++  }
+   return errors;
+ }
+diff --git a/package.json b/package.json
+index da4c0100bcfa1d3dfcb2a3af65e27a9f084677b5..567b53b4bad6cb3931d4f03c7975cfc973d2aceb 100644
+--- a/package.json
++++ b/package.json
+@@ -15,12 +15,14 @@
+     "verify:pension-routing": "node --test scripts/verify-pension-routing.cjs",
+     "verify:pension-statement": "node --test scripts/verify-pension-statement.cjs",
+     "verify:pension-prefill": "node --test scripts/verify-pension-prefill.cjs",
++    "verify:pension-review": "node --test scripts/verify-pension-review-policy.cjs scripts/verify-pension-statement.cjs scripts/verify-pension-prefill.cjs scripts/verify-document-review-required.cjs",
++    "fixture:pension-12m": "node scripts/generate-pension-qa-fixture.cjs",
+     "verify:business-profit": "node scripts/verify-business-profit.cjs",
+     "verify:upload-safety": "node scripts/verify-upload-safety.cjs",
+     "verify:withholding-sources": "node scripts/verify-withholding-sources.cjs",
+     "verify:route-protection": "node scripts/verify-route-protection.cjs",
+     "verify:dependency-health": "node scripts/verify-dependency-health.cjs",
+-    "verify:all": "npm run verify:sales-tax-rules && npm run verify:sales-tax-intake && npm run verify:sales-tax-return && npm run verify:sales-tax-dates && npm run verify:multiple-filings && npm run verify:sales-tax-module && npm run verify:sales-tax-uploads && npm run verify:sales-tax-review && npm run verify:sales-tax-businesses && npm run verify:sales-tax-manual && npm run verify:srb-rules && npm run verify:srb-return && npm run verify:srb-module && npm run verify:ty2026-rates && npm run verify:ty2026-data-model && npm run verify:ty2026-filer-status && npm run verify:ty2026-subcategories && npm run verify:ty2026-tax-calculation && npm run verify:pension-routing && npm run verify:pension-statement && npm run verify:pension-prefill && npm run verify:business-profit && npm run verify:salary-certificate-fields && npm run verify:document-extraction-state && npm run verify:upload-safety && npm run verify:withholding-sources && npm run verify:route-protection && npm run verify:dependency-health && npm run verify:tax-breakdown-surfacing && npm run verify:cleanup-hygiene && npm run verify:flat-income-routes && npm run verify:advance-tax && npm run verify:money-precision && npm run verify:money-database && npm run verify:bank-statement-isolation && npm run verify:portal-field-map && npm run verify:bank-iban && npm run verify:cash-in-hand && npm run verify:bank-classification && npm run verify:employment-captures && npm run verify:property-capture && npm run verify:cnic-profile-plan && npm run verify:iris-row-filler && npm run verify:iris-wealth-driver && npm run verify:iris-employer-driver && npm run verify:iris-navigation",
++    "verify:all": "npm run verify:sales-tax-rules && npm run verify:sales-tax-intake && npm run verify:sales-tax-return && npm run verify:sales-tax-dates && npm run verify:multiple-filings && npm run verify:sales-tax-module && npm run verify:sales-tax-uploads && npm run verify:sales-tax-review && npm run verify:sales-tax-businesses && npm run verify:sales-tax-manual && npm run verify:srb-rules && npm run verify:srb-return && npm run verify:srb-module && npm run verify:ty2026-rates && npm run verify:ty2026-data-model && npm run verify:ty2026-filer-status && npm run verify:ty2026-subcategories && npm run verify:ty2026-tax-calculation && npm run verify:pension-routing && npm run verify:pension-review && npm run verify:business-profit && npm run verify:salary-certificate-fields && npm run verify:document-extraction-state && npm run verify:upload-safety && npm run verify:withholding-sources && npm run verify:route-protection && npm run verify:dependency-health && npm run verify:tax-breakdown-surfacing && npm run verify:cleanup-hygiene && npm run verify:flat-income-routes && npm run verify:advance-tax && npm run verify:money-precision && npm run verify:money-database && npm run verify:bank-statement-isolation && npm run verify:portal-field-map && npm run verify:bank-iban && npm run verify:cash-in-hand && npm run verify:bank-classification && npm run verify:employment-captures && npm run verify:property-capture && npm run verify:cnic-profile-plan && npm run verify:iris-row-filler && npm run verify:iris-wealth-driver && npm run verify:iris-employer-driver && npm run verify:iris-navigation",
+     "verify:money-precision": "node scripts/verify-money-precision.cjs",
+     "verify:money-database": "node scripts/verify-money-database.cjs",
+     "verify:tax-breakdown-surfacing": "node scripts/verify-tax-breakdown-surfacing.cjs",
+diff --git a/scripts/verify-document-review-required.cjs b/scripts/verify-document-review-required.cjs
+index de494cbf47bb51dd6bb5384b8bd9cb158cb4f9b1..fc265301216c37659d7ee1e1f472da8bcce165a1 100644
+--- a/scripts/verify-document-review-required.cjs
++++ b/scripts/verify-document-review-required.cjs
+@@ -18,7 +18,7 @@ test('duplicate yearly sales aliases refuse instead of choosing the first amount
+ for(const delta of [{'Tax Year':2025},{Currency:'USD'},{'Sales for the year':0},{'Reporting Period Start':'2025-08-01'},{'Reporting Period End':'2026-05-31'}])test('Books invalid source context refuses '+JSON.stringify(delta),()=>assert.ok(req.getDocumentReviewRequiredErrors('business_books',fields({...books,...delta}),2026).length));
+ test('malformed stored extraction refuses; no required policy is invented for unrelated document slots',()=>{assert.ok(req.storedDocumentReviewRequiredErrors('business_books','invalid JSON',2026).length);assert.deepEqual(req.getDocumentReviewRequiredErrors('invoice_summary',[],2026),[]);});
+ test('salary markers still use the existing salary required-field contract',()=>{assert.equal(req.isDocumentReviewRequiredField('salary_certificate','Gross Salary (Annual PKR)'),true);assert.equal(req.isDocumentReviewRequiredField('salary_certificate','Employer NTN'),false);});
+-test('UI/server/Continue/packet boundaries are wired; redundant always-visible IBAN paragraph removed',()=>{const ui=fs.readFileSync(path.join(root,'components/tax/filing/wizard-documents-step.tsx'),'utf8'),action=fs.readFileSync(path.join(root,'app/actions/extraction.ts'),'utf8'),wizard=fs.readFileSync(path.join(root,'components/tax/filing/filing-wizard.tsx'),'utf8'),gate=fs.readFileSync(path.join(root,'lib/tax/filing-completeness.ts'),'utf8');assert.ok(!ui.includes('The account IBAN (24 characters, starts with PK)'));assert.match(ui,/required=\{isDocumentReviewRequiredField/);assert.match(ui,/reviewRequiredErrors\.length > 0/);assert.match(action,/requiredErrors\.length\) return \{ success: false/);assert.match(wizard,/document\.reviewRequiredErrors\.length > 0/);assert.match(gate,/storedDocumentReviewRequiredErrors\(documentType, latestDocument\.extractedData, draft\.taxYear\)/);});
++test('UI/server/Continue/packet boundaries are wired; redundant always-visible IBAN paragraph removed',()=>{const ui=fs.readFileSync(path.join(root,'components/tax/filing/wizard-documents-step.tsx'),'utf8'),action=fs.readFileSync(path.join(root,'app/actions/extraction.ts'),'utf8'),wizard=fs.readFileSync(path.join(root,'components/tax/filing/filing-wizard.tsx'),'utf8'),gate=fs.readFileSync(path.join(root,'lib/tax/filing-completeness.ts'),'utf8');assert.ok(!ui.includes('The account IBAN (24 characters, starts with PK)'));assert.match(ui,/required=\{isDocumentReviewRequiredField/);assert.match(ui,/reviewRequiredErrors\.length > 0/);assert.match(action,/requiredErrors\.length\)\s*return\s*\{\s*success:\s*false/);assert.match(wizard,/document\.reviewRequiredErrors\.length > 0/);assert.match(gate,/storedDocumentReviewRequiredErrors\(documentType, latestDocument\.extractedData, draft\.taxYear\)/);});
+ require.extensions['.tsx']=(m,f)=>m._compile(ts.transpileModule(fs.readFileSync(f,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020,jsx:ts.JsxEmit.ReactJSX,esModuleInterop:true,resolveJsonModule:true}}).outputText,f);
+ test('rendered review has Required attributes for missing fields, optional scalars stay optional, and Map is blocked',()=>{
+  const React=require('react'),{renderToStaticMarkup}=require('react-dom/server'),{JSDOM}=require('jsdom');
+diff --git a/scripts/verify-pension-prefill.cjs b/scripts/verify-pension-prefill.cjs
+index 4de646245c9eaa344a056acbc61942a58c2458b7..4c15d8d476de53cfc4c18babcd7b29079ae457eb 100644
+--- a/scripts/verify-pension-prefill.cjs
++++ b/scripts/verify-pension-prefill.cjs
+@@ -202,9 +202,14 @@ test("missing actual tax deducted remains unknown even when the three review sug
+   assert.equal(h.extractResult.success, true);
+   assert.equal(getField(h.extractResult.extracted, deducted).value, null);
+   const result = await h.approve();
+-  assert.equal(result.success, false);
+-  assert.match(result.error, /Pension Tax Deducted.*required/);
+-  assert.equal(h.state.documents[0].extractionStatus, "COMPLETED");
++  assert.equal(result.success, true, result.error);
++  assert.equal(h.state.documents[0].extractionStatus, "MAPPED");
++  const calc = await h.calculate();
++  assert.equal(calc.result.status, "NEEDS_RULES");
++  assert.equal(calc.result.taxDue, null);
++  assert.equal(calc.result.taxPayable, null);
++  assert.equal(calc.result.refundDue, null);
++  assert.match(calc.result.note, /not stated|unknown withholding/i);
+ });
+ 
+ test("human-entered decision fields without source quotes survive review saves", () => {
+@@ -407,25 +412,24 @@ test("actual review UI renders prefilled values as unapproved suggestions with a
+   assert.equal(approveButton.disabled, false);
+ });
+ 
+-test("missing quote still renders required blank and a disabled approve button", () => {
++test("missing quote cannot supply a tax basis but does not block approval of printed facts", () => {
+   const raw = printedPayload();
+   delete getField(raw, approved).sourceEvidence;
+   const doc = uiDocument("COMPLETED", normalize(raw));
+-  assert.equal(labelElement(doc, approved).querySelector("input").value, "");
+-  assert.match(
+-    doc.body.textContent,
+-    /Approved Pension Amount for Tax .* is required/,
+-  );
++  const input = labelElement(doc, approved).querySelector("input");
++  assert.equal(input.value, "");
++  assert.equal(input.required, false);
++  assert.match(doc.body.textContent, /Review the Approved Pension Amount for Tax and allowance treatment/);
+   const approveButton = [...doc.querySelectorAll("button")].find(
+     (b) => b.textContent === "Save & Approve Map",
+   );
+-  assert.equal(approveButton.disabled, true);
++  assert.equal(approveButton.disabled, false);
+ });
+ 
+ test("mapped pension UI keeps reviewer note editable and does not call saved values unapproved", () => {
+   const doc = uiDocument("MAPPED");
+   assert.doesNotMatch(doc.body.textContent, /suggestions, not approval/i);
+-  assert.match(doc.body.textContent, /Pension source is approved/);
++  assert.match(doc.body.textContent, /Pension statement facts are approved/);
+   assert.equal(
+     labelElement(doc, note).querySelector("textarea").readOnly,
+     false,
+@@ -442,7 +446,7 @@ test("editing pension review fields clears stale source-evidence badges in the r
+   assert.match(hook, /confidence:\s*0/);
+ });
+ 
+-async function withClientHook(run) {
++async function withClientHook(run, payloadOverride) {
+   const { createRoot } = require("react-dom/client");
+   const { act } = React;
+   const dom = new JSDOM(
+@@ -467,7 +471,7 @@ async function withClientHook(run) {
+   }
+   let reactRoot;
+   try {
+-    const payload = normalize(printedPayload());
++    const payload = normalize(payloadOverride ?? printedPayload());
+     const h = harness({
+       pension: 1_989_000,
+       status: "COMPLETED",
+@@ -569,3 +573,38 @@ test("real React Save & Approve Map explicitly approves prefilled values without
+     assert.equal((await h.calculate()).pensionSource.annualPension, 1_989_000);
+   });
+ });
++
++
++test("optional reviewer fields can be added, batched, edited and re-approved through the real React hook", async () => {
++  const simple = require("../test-fixtures/pension/above-10m-ty2026.json").expectedExtraction;
++  await withClientHook(async ({ h, act, current }) => {
++    assert.equal(current().extractedByDocumentId["qa-pension-doc"].fields.some(f => reviewLabels.includes(f.label)), false);
++    await act(async () => { await current().handleMapDocument("pension_statement"); });
++    assert.equal(current().documentRecords.pension_statement.extractionStatus, "MAPPED");
++    await act(async () => {
++      current().handlePensionReviewFieldChange("pension_statement", "approvedAnnual", "11000000");
++      current().handlePensionReviewFieldChange("pension_statement", "reviewNote", "QA manual override branch with a reviewed reason; no exemption claimed.");
++    });
++    let payload = current().extractedByDocumentId["qa-pension-doc"];
++    assert.equal(getField(payload, approved).value, "11000000");
++    assert.match(getField(payload, note).value, /reviewed reason/);
++    assert.equal(current().documentRecords.pension_statement.extractionStatus, "COMPLETED");
++    await act(async () => {
++      current().handlePensionReviewFieldChange("pension_statement", "approvedAnnual", "11200000");
++    });
++    payload = current().extractedByDocumentId["qa-pension-doc"];
++    assert.equal(payload.fields.filter(f => f.label === approved).length, 1);
++    assert.equal(getField(payload, approved).value, "11200000");
++    assert.equal(getField(payload, approved).confidence, 0);
++    assert.equal(getField(payload, approved).reviewSuggestion, false);
++    assert.equal(getField(payload, approved).sourceEvidence, undefined);
++    await act(async () => { await current().handleSaveDocumentReview("pension_statement"); });
++    assert.equal(current().documentUploadError, null);
++    assert.equal(h.state.documents[0].extractionStatus, "COMPLETED");
++    assert.equal((await h.calculate()).result.status, "NEEDS_RULES");
++    await act(async () => { await current().handleMapDocument("pension_statement"); });
++    assert.equal(current().documentUploadError, null);
++    assert.equal((await h.calculate()).pensionSource.annualPension, 11_200_000);
++    assert.equal(h.state.ledgerWrites.length, 0);
++  }, simple);
++});
+diff --git a/scripts/verify-pension-statement.cjs b/scripts/verify-pension-statement.cjs
+index 83527ae0663a713e87e57952e4f6d59c721ff0f1..1031a3fb1d7ac94167347dd86168af6cdb4368df 100644
+--- a/scripts/verify-pension-statement.cjs
++++ b/scripts/verify-pension-statement.cjs
+@@ -81,9 +81,6 @@ const validation = (h, snapshot) =>
+     .pensionPacketValidationError(snapshot, "qa-draft", "qa-user");
+ 
+ for (const [name, value] of [
+-  ["blank", ""],
+-  ["null", null],
+-  ["undefined", undefined],
+   ["negative", -1],
+   ["zero", 0],
+   ["nonnumeric", "tax free"],
+@@ -93,7 +90,6 @@ for (const [name, value] of [
+   ["object", {}],
+   ["array", []],
+   ["unsafe magnitude", "99999999999999999999999"],
+-  ["infinite", Infinity],
+ ]) {
+   test(`approval rejects ${name} approved annual pension without writes`, async () => {
+     const h = harness({
+@@ -110,14 +106,32 @@ for (const [name, value] of [
+ }
+ for (const label of [deductedLabel, coveredLabel]) {
+   for (const value of [null, "", -1, "unknown"]) {
+-    test(`${label} ${JSON.stringify(value)} is not silently treated as zero`, async () => {
++    test(`${label} ${JSON.stringify(value)} preserves unknown facts or rejects malformed amounts`, async () => {
+       const h = harness({
+         status: "COMPLETED",
+         fields: pensionFields(10_992_000, { [label]: value }),
+       });
+       const r = await h.approve();
+-      assert.equal(r.success, false);
+-      assert.match(r.error, /withholding|tax deducted/i);
++      if (value === null || value === "") {
++        assert.equal(r.success, true, r.error);
++        const calc = await calculated(h);
++        if (label === deductedLabel) {
++          assert.equal(calc.result.status, "NEEDS_RULES");
++          assert.equal(calc.result.taxDue, null);
++          assert.equal(calc.result.taxPayable, null);
++          assert.equal(calc.result.refundDue, null);
++          assert.match(calc.result.note, /not stated|unknown withholding/i);
++        } else {
++          // Known nil actual deduction cannot overlap any ledger entry.
++          assert.equal(calc.result.status, "ESTIMATE");
++          assert.equal(calc.pensionSource.taxAlreadyInLedger, 0);
++          assert.equal(calc.pensionSource.creditToAdd, 0);
++        }
++      } else {
++        assert.equal(r.success, false);
++        assert.match(r.error, /withholding|tax deducted/i);
++      }
++      assert.equal(h.state.ledgerWrites.length, 0);
+     });
+   }
+ }
+@@ -146,13 +160,12 @@ test("monthly/net totals never supply missing annual gross or approved tax base"
+     { fields },
+     true,
+   );
+-  for (const label of [
+-    "Gross Pension (Annual PKR)",
+-    approvedLabel,
+-    deductedLabel,
+-    coveredLabel,
+-  ])
++  for (const label of ["Gross Pension (Annual PKR)", deductedLabel]) {
+     assert.equal(normalized.fields.find((f) => f.label === label).value, null);
++  }
++  for (const label of [approvedLabel, coveredLabel, "Pension Tax Base Review Note"]) {
++    assert.equal(normalized.fields.some((f) => f.label === label), false);
++  }
+   const r = await h.approve();
+   assert.equal(r.success, false);
+   assert.match(r.error, /gross|approved/i);
+diff --git a/components/tax/filing/pension-tax-review-panel.tsx b/components/tax/filing/pension-tax-review-panel.tsx
+new file mode 100644
+index 0000000000000000000000000000000000000000..c9b9eaca6801f82de6d12b7695fb64491794263a
+--- /dev/null
++++ b/components/tax/filing/pension-tax-review-panel.tsx
+@@ -0,0 +1,94 @@
++"use client";
++
++import {
++  PENSION_LABELS,
++  getPensionTaxReadinessErrors,
++  pensionFieldKey,
++  pensionReviewNoteRequired,
++  pensionTaxBasisNeedsReview,
++  type PensionField,
++  type PensionReviewDecisionKey,
++} from "@/lib/tax/pension-statement-fields";
++
++type Props = {
++  fields: PensionField[];
++  approved?: boolean;
++  onChange: (key: PensionReviewDecisionKey, value: string) => void;
++};
++
++/** App/reviewer decisions are not printed pension-statement requirements. */
++export function PensionTaxReviewPanel({ fields, approved = false, onChange }: Props) {
++  const noteRequired = pensionReviewNoteRequired(fields);
++  const warnings = getPensionTaxReadinessErrors(fields);
++  const hasReviewValues = fields.some((field) =>
++    ["approvedAnnual", "taxAlreadyInLedger", "reviewNote"].includes(pensionFieldKey(field.label) ?? "") &&
++    field.value !== null && field.value !== undefined && String(field.value).trim() !== "",
++  );
++  const keys: PensionReviewDecisionKey[] = ["approvedAnnual", "taxAlreadyInLedger", "reviewNote"];
++  return (
++    <section className="my-3 space-y-3 rounded-lg border border-amber-200 bg-amber-50/50 p-3 text-xs">
++      <div>
++        <h4 className="font-semibold text-foreground">Pension tax readiness — separate from printed facts</h4>
++        <p className="mt-1 text-muted-foreground">
++          Only Tax Year and annual Gross Pension are always required to approve the statement facts.
++          A standard statement uses its reviewed annual gross pension without a duplicate approved-amount entry or review note.
++          Non-zero medical allowance or a material source mismatch needs an explicit reviewed basis; no allowance treatment is guessed.
++        </p>
++      </div>
++      {warnings.length > 0 ? (
++        <div role="status" className="space-y-1 text-amber-900">
++          <p className="font-medium">The statement facts can be approved; these items must be resolved before final tax calculation:</p>
++          <ul className="list-disc space-y-1 pl-4">
++            {warnings.map((warning) => <li key={warning}>{warning}</li>)}
++          </ul>
++          <p>Blank tax deducted means not stated, not zero. For positive deductions, an empty current tax ledger needs no overlap entry; possible duplicates require confirmation.</p>
++        </div>
++      ) : (
++        <p className="text-muted-foreground">Final tax still checks the verified profile, current tax ledger and approved source. This panel does not approve or submit a return.</p>
++      )}
++      <details open={noteRequired || pensionTaxBasisNeedsReview(fields) || hasReviewValues}>
++        <summary className="cursor-pointer font-medium text-foreground">Conditional tax-basis / withholding review (not PDF fields)</summary>
++        <p className="my-2 text-muted-foreground">
++          Leave these blank for a standard gross-only statement with verified nil withholding.
++          Enter an approved basis only after reviewing the relevant treatment. A changed basis, allowance decision or material source mismatch requires a reason.
++          Ledger overlap is an app reconciliation decision, never an amount inferred from the PDF.
++        </p>
++        <div className="grid gap-3 sm:grid-cols-2">
++          {keys.map((key) => {
++            const field = fields.find((candidate) => pensionFieldKey(candidate.label) === key);
++            const value = String(field?.value ?? "");
++            const required = key === "reviewNote" && noteRequired;
++            const suggestion = !approved && field?.reviewSuggestion === true;
++            return (
++              <label key={key} className={key === "reviewNote" ? "grid gap-1 sm:col-span-2" : "grid gap-1"}>
++                <span className="font-medium text-muted-foreground">
++                  {PENSION_LABELS[key]}
++                  {required && <span className="ml-1 text-destructive">· Required for this override</span>}
++                  {!required && <span className="ml-1">· Optional / conditional</span>}
++                  {suggestion && <span className="ml-1 text-amber-700">· PDF suggestion — approval required</span>}
++                </span>
++                {key === "reviewNote" ? (
++                  <textarea rows={3} required={required} aria-required={required} value={value}
++                    onChange={(event) => onChange(key, event.target.value)}
++                    placeholder="Only needed for an override, allowance decision or material source mismatch; not a printed statement requirement."
++                    className="min-h-24 rounded-lg border bg-background px-3 py-2 text-sm" />
++                ) : (
++                  <input type="text" inputMode="decimal" value={value}
++                    onChange={(event) => onChange(key, event.target.value)}
++                    placeholder={key === "approvedAnnual" ? "Blank = reviewed gross, unless allowance review is needed" : "Only enter a verified pension withholding overlap"}
++                    className="h-9 rounded-lg border bg-background px-3 text-sm" />
++                )}
++                {suggestion && typeof field?.sourceEvidence === "string" && (
++                  <details className="text-muted-foreground">
++                    <summary className="cursor-pointer">Quoted PDF text — verify against the original</summary>
++                    <p className="mt-1 whitespace-pre-wrap break-words">{field.sourceEvidence}</p>
++                  </details>
++                )}
++              </label>
++            );
++          })}
++        </div>
++      </details>
++    </section>
++  );
++}
+diff --git a/scripts/generate-pension-qa-fixture.cjs b/scripts/generate-pension-qa-fixture.cjs
+new file mode 100644
+index 0000000000000000000000000000000000000000..b5952f12907834c00d1fa8d30e002995d3e255d4
+--- /dev/null
++++ b/scripts/generate-pension-qa-fixture.cjs
+@@ -0,0 +1,97 @@
++#!/usr/bin/env node
++// Reproducible, clearly fictional upload fixture. No real identity or official branding.
++const fs = require("node:fs");
++const path = require("node:path");
++const PDFDocument = require("pdfkit");
++const fixture = require("../test-fixtures/pension/above-10m-ty2026.json");
++const output = path.resolve(process.argv[2] || path.join(__dirname, "../test-fixtures/pension/SYNTHETIC-Pension-12M-TY2026.pdf"));
++fs.mkdirSync(path.dirname(output), { recursive: true });
++const stream = fs.createWriteStream(output);
++const pdf = new PDFDocument({
++  size: "A4", margin: 0, autoFirstPage: true,
++  info: {
++    Title: "SYNTHETIC QA ONLY - Annual Pension Statement - TY2026 - PKR 12,000,000",
++    Author: "Tax Rocket QA Fixtures (Fictional)",
++    Subject: "Not for submission, identification, financial use, or evidence of real income",
++    Keywords: "synthetic, fictional, test data, pension, TY2026, 12000000",
++    CreationDate: new Date("2026-07-05T00:00:00Z"),
++    ModDate: new Date("2026-07-05T00:00:00Z"),
++  },
++});
++pdf.pipe(stream);
++const color = { ink: "#173242", muted: "#586976", teal: "#075D66", light: "#F1F7F8", line: "#DCE6E8", amber: "#FFF1CF", amberInk: "#805108" };
++const width = pdf.page.width;
++const left = 36, content = width - 72;
++const money = (n) => Number(n).toLocaleString("en-US", { maximumFractionDigits: 0 });
++function text(value, x, y, options = {}) {
++  const { size = 10, bold = false, fill = color.ink, ...rest } = options;
++  pdf.font(bold ? "Helvetica-Bold" : "Helvetica").fontSize(size).fillColor(fill).text(String(value), x, y, { lineBreak: false, ...rest });
++}
++function line(x1, y1, x2, y2, stroke = color.line) {
++  pdf.moveTo(x1, y1).lineTo(x2, y2).lineWidth(0.6).strokeColor(stroke).stroke();
++}
++// Conspicuous, non-official marking; no government emblem, real signature or bank logo.
++pdf.roundedRect(left, 26, content, 28, 5).fill(color.amber);
++text("SYNTHETIC QA FIXTURE  /  NOT FOR SUBMISSION", left + 12, 35, { size: 10, bold: true, fill: color.amberInk });
++text(fixture.issuer.toUpperCase(), left, 75, { size: 9, bold: true, fill: color.teal });
++text("Annual Pension Statement", left, 96, { size: 22, bold: true });
++text("Fictional payment record  |  Annual amounts in Pakistan Rupees (PKR)", left, 126, { size: 9, fill: color.muted });
++
++pdf.roundedRect(left, 153, content, 94, 6).fill(color.light);
++text("PENSIONER", left + 12, 166, { size: 8, fill: color.muted });
++text(fixture.pensionerName, left + 12, 181, { size: 11, bold: true });
++text("PPO NUMBER", left + 12, 210, { size: 8, fill: color.muted });
++text(fixture.ppoNumber, left + 12, 225, { size: 10 });
++const rightX = left + 320;
++text("TAX YEAR", rightX, 166, { size: 8, fill: color.muted });
++text(fixture.taxYear, rightX, 181, { size: 13, bold: true });
++text("REPORTING PERIOD", rightX, 210, { size: 8, fill: color.muted });
++text("01 Jul 2025 - 30 Jun 2026", rightX, 225, { size: 9 });
++
++text("ANNUAL PAYMENT SUMMARY", left, 267, { size: 11, bold: true, fill: color.teal });
++pdf.rect(left, 287, content, 25).fill(color.teal);
++text("Printed statement fact", left + 12, 295, { size: 9, bold: true, fill: "#FFFFFF" });
++text("Annual amount (PKR)", left + 360, 295, { size: 9, bold: true, fill: "#FFFFFF", width: content - 372, align: "right" });
++const facts = [
++  ["Gross Pension (Annual PKR)", fixture.annualGross],
++  ["Medical Allowance (Annual PKR)", fixture.annualMedical],
++  ["Pension Tax Deducted (Annual PKR)", fixture.annualTaxDeducted],
++  ["Net Pension Payable (Annual PKR)", fixture.annualNetPaid],
++];
++facts.forEach(([label, value], index) => {
++  const y = 312 + index * 31;
++  if (index % 2 === 0) pdf.rect(left, y, content, 31).fill("#F5F8F9");
++  text(label, left + 12, y + 10, { size: 10, bold: index === 0 || index === 3 });
++  text(money(value), left + 360, y + 9, { size: 12, bold: true, width: content - 372, align: "right" });
++  line(left, y + 31, left + content, y + 31);
++});
++
++text("MONTHLY PAYMENT SCHEDULE", left, 459, { size: 11, bold: true, fill: color.teal });
++const columns = [
++  { label: "Month", x: left + 8, w: 92, align: "left" },
++  { label: "Gross PKR", x: left + 100, w: 100, align: "right" },
++  { label: "Medical PKR", x: left + 204, w: 88, align: "right" },
++  { label: "Tax deducted PKR", x: left + 296, w: 106, align: "right" },
++  { label: "Net paid PKR", x: left + 406, w: content - 414, align: "right" },
++];
++pdf.rect(left, 482, content, 22).fill("#E7F0F2");
++for (const col of columns) text(col.label, col.x, 489, { size: 8, bold: true, width: col.w, align: col.align });
++for (let i = 0; i < 12; i++) {
++  const date = new Date(Date.UTC(2025, 6 + i, 1));
++  const month = date.toLocaleString("en-GB", { month: "short", year: "numeric", timeZone: "UTC" });
++  const values = [month, money(fixture.monthlyGross), "0", "0", money(fixture.monthlyGross)];
++  const y = 504 + i * 18;
++  if (i % 2 === 0) pdf.rect(left, y, content, 18).fill("#F5F8F9");
++  columns.forEach((col, j) => text(values[j], col.x, y + 5, { size: 8.5, width: col.w, align: col.align }));
++}
++line(left, 720, left + content, 720);
++pdf.font("Helvetica").fontSize(8.5).fillColor(color.muted).text(
++  "QA scenario: medical allowance and tax deducted are explicitly NIL (0). All twelve monthly payments are included. The nil deduction is a test input, not a conclusion that the pension is tax-exempt. No CNIC or date of birth is printed.",
++  left, 737, { width: content, lineGap: 2 },
++);
++line(left, 784, left + content, 784);
++text("FICTIONAL FIGURES. Not evidence of real income. No official certification or signature.", left, 795, { size: 8, bold: true, fill: color.amberInk });
++text(`Prepared: ${fixture.preparedDate}  |  QA-PENSION-12M  |  Page 1 of 1`, left, 810, { size: 7.5, fill: color.muted });
++pdf.end();
++stream.on("finish", () => console.log(output));
++stream.on("error", (error) => { console.error(error); process.exitCode = 1; });
+diff --git a/scripts/verify-pension-review-policy.cjs b/scripts/verify-pension-review-policy.cjs
+new file mode 100644
+index 0000000000000000000000000000000000000000..08a77f7bb34ba107af3ab764c111ac5ed3f882cf
+--- /dev/null
++++ b/scripts/verify-pension-review-policy.cjs
+@@ -0,0 +1,338 @@
++const test = require("node:test");
++const assert = require("node:assert/strict");
++const fs = require("node:fs");
++const path = require("node:path");
++const React = require("react");
++const { renderToStaticMarkup } = require("react-dom/server");
++const { JSDOM } = require("jsdom");
++const { harness, root } = require("./helpers/pension-harness.cjs");
++const { pensionEntryHold } = require("../electron-connect/pension-guard.js");
++const fixture = require("../test-fixtures/pension/above-10m-ty2026.json");
++const labels = {
++  gross: "Gross Pension (Annual PKR)",
++  medical: "Medical Allowance (Annual PKR)",
++  net: "Net Pension Payable (Annual PKR)",
++  deducted: "Pension Tax Deducted (Annual PKR)",
++  approved: "Approved Pension Amount for Tax (Annual PKR)",
++  overlap: "Pension Withholding Already in Tax Ledger (Annual PKR)",
++  note: "Pension Tax Base Review Note",
++};
++const reviewLabels = [labels.approved, labels.overlap, labels.note];
++const plain = (v) => JSON.parse(JSON.stringify(v));
++function facts(changes = {}, removed = []) {
++  const fields = plain(fixture.expectedExtraction.fields).filter((f) => !removed.includes(f.label));
++  for (const [label, value] of Object.entries(changes)) {
++    const field = fields.find((f) => f.label === label);
++    if (field) field.value = value;
++    else fields.push({ label, value });
++  }
++  return fields;
++}
++function qa(options = {}) {
++  return harness({ pension: 12_000_000, ledgerPension: 12_000_000, status: "COMPLETED", fields: facts(), ...options });
++}
++function parser(h = qa()) { return h.load("lib/tax/pension-statement-fields.ts"); }
++function render(fields, status = "COMPLETED") {
++  const h = qa({ fields, status });
++  const { WizardDocumentsStep } = h.load("components/tax/filing/wizard-documents-step.tsx");
++  const noop = () => {};
++  const html = renderToStaticMarkup(React.createElement(WizardDocumentsStep, {
++    taxYear: 2026,
++    documentSlots: [{ documentType: "pension_statement", label: "Pension Statement", reason: "QA", required: true }],
++    uploadedDocuments: { pension_statement: "SYNTHETIC-Pension-12M-TY2026.pdf" },
++    documentRecords: { pension_statement: { id: "qa-pension-doc", fileName: "qa.pdf", extractionStatus: status, extractionProvider: "synthetic", extractedAt: null } },
++    extractedByDocumentId: { "qa-pension-doc": { fields } },
++    reviewingDocumentId: "qa-pension-doc", uploadFileInputsRef: { current: {} },
++    triggerDocumentUpload: noop, handleDocumentFileSelected: noop, handleExtractDocument: noop,
++    handleReviewDocument: noop, handleExtractedFieldChange: noop, handlePensionReviewFieldChange: noop,
++    handleExtractedTransactionChange: noop, handleSaveDocumentReview: noop, handleMapDocument: noop,
++    handleSaveStatementIban: noop, handleSaveSalaryEmployers: noop, isSalaryEmployerDirty: () => false,
++  }));
++  return new JSDOM(html).window.document;
++}
++const labelElement = (doc, label) => [...doc.querySelectorAll("label")].find((node) => node.textContent.includes(label));
++const approveButton = (doc) => [...doc.querySelectorAll("button")].find((node) => node.textContent === "Save & Approve Map");
++function assertTaxHeld(result) {
++  assert.equal(result.status, "NEEDS_RULES");
++  for (const key of ["taxableIncome", "baseTax", "surcharge", "taxDue", "taxPayable", "refundDue"]) assert.equal(result[key], null, key);
++}
++
++// The new fixture has no app-only field printed to make an old validator pass.
++test("ordinary PDF facts do not acquire three artificial reviewer requirements", () => {
++  const h = qa(); const p = parser(h);
++  const raw = { fields: facts() };
++  const normalized = p.ensurePensionStatementReviewFields(raw, true);
++  assert.equal(normalized.fields.some((f) => reviewLabels.includes(f.label)), false);
++  assert.equal(p.getPensionStatementReviewErrors(normalized.fields, 2026).length, 0);
++  const req = h.load("lib/tax/document-review-required.ts");
++  const required = normalized.fields.filter((f) => req.isDocumentReviewRequiredField("pension_statement", f.label, normalized.fields)).map((f) => f.label);
++  assert.deepEqual(plain(required), ["Tax Year", labels.gross]);
++});
++
++test("plain gross-only statement approves and prices 12M without a duplicate base, overlap entry or note", async () => {
++  const h = qa();
++  const result = await h.approve();
++  assert.equal(result.success, true, result.error);
++  assert.equal(result.annualPension, 12_000_000);
++  const calc = await h.calculate();
++  for (const key of ["status", "baseTax", "surcharge", "taxDue", "taxWithheld", "taxPayable", "refundDue"]) {
++    assert.equal(calc.result[key], fixture.expectedCurrentEngine[key], key);
++  }
++  assert.equal(calc.pensionSource.annualPension, 12_000_000);
++  assert.equal(calc.pensionSource.taxAlreadyInLedger, 0);
++  assert.equal(calc.pensionSource.reviewNote, "");
++  assert.equal(h.state.entries.length, 1);
++  assert.equal(h.state.ledgerWrites.length, 0);
++  assert.equal(h.state.user.dateOfBirth.toISOString().slice(0, 10), "1962-03-15");
++});
++
++for (const value of [undefined, null, ""]) {
++  test(`missing/blank optional basis ${String(value)} uses unambiguous gross, not net or an invented scalar`, () => {
++    const fields = value === undefined ? facts() : facts({ [labels.approved]: value });
++    const source = parser().readReviewedPensionStatement({ fields }, 2026);
++    assert.equal(source.approvedAnnual, 12_000_000);
++    assert.equal(source.reviewNote, "");
++  });
++}
++
++for (const value of [undefined, null, ""]) {
++  test(`missing/blank withholding ${String(value)} may save facts but cannot price or produce a packet`, async () => {
++    const fields = value === undefined ? facts({}, [labels.deducted]) : facts({ [labels.deducted]: value });
++    const h = qa({ fields });
++    assert.equal((await h.approve()).success, true);
++    assert.equal(parser(h).readPensionStatementFacts(h.state.documents[0].extractedData, 2026).taxDeducted, null);
++    const calc = await h.calculate();
++    assertTaxHeld(calc.result);
++    assert.match(calc.result.note, /unknown withholding is not zero/i);
++    assert.equal((await h.generate({ acceptUnmappedPortalSources: true })).success, false);
++    assert.equal(h.state.ledgerWrites.length, 0);
++  });
++}
++
++test("normalizer and UI cannot show positive confidence for a missing fact", () => {
++  const fields = facts({ [labels.deducted]: null });
++  fields.find((f) => f.label === labels.deducted).confidence = 0.99;
++  const normalized = parser().ensurePensionStatementReviewFields({ fields }, true);
++  assert.equal(normalized.fields.find((f) => f.label === labels.deducted).confidence, 0);
++  const doc = render(fields);
++  assert.doesNotMatch(labelElement(doc, labels.deducted).textContent, /confidence/);
++  assert.equal(approveButton(doc).disabled, false);
++  assert.match(doc.querySelector('[role="status"]').textContent, /unknown withholding is not zero/i);
++});
++
++test("rendered ordinary facts require only year/gross; the note textarea is optional", () => {
++  const doc = render(facts());
++  assert.equal(doc.querySelectorAll("input[required]").length, 2);
++  assert.equal(labelElement(doc, labels.note).querySelector("textarea").required, false);
++  assert.equal(labelElement(doc, labels.note).querySelector("textarea").getAttribute("aria-required"), "false");
++  assert.equal(labelElement(doc, labels.approved).querySelector("input").value, "");
++  assert.equal(approveButton(doc).disabled, false);
++});
++
++for (const value of [null, "", "ok"]) {
++  test(`manual tax-base override still needs a substantive reason (${JSON.stringify(value)})`, async () => {
++    const fields = facts({ [labels.approved]: 11_000_000, [labels.note]: value });
++    const h = qa({ fields });
++    const req = h.load("lib/tax/document-review-required.ts");
++    assert.equal(req.isDocumentReviewRequiredField("pension_statement", labels.note, fields), true);
++    const result = await h.approve();
++    assert.equal(result.success, false);
++    assert.match(result.error, /Review Note.*required.*manual tax-base override/);
++    assert.equal(h.state.updates.length, 0);
++    const doc = render(fields);
++    assert.equal(labelElement(doc, labels.note).querySelector("textarea").required, true);
++    assert.equal(approveButton(doc).disabled, true);
++  });
++}
++
++test("re-entering the identical unambiguous gross is not a tax-base override", async () => {
++  const fields = facts({ [labels.approved]: "12,000,000", [labels.note]: "" });
++  assert.equal(parser().pensionReviewNoteRequired(fields), false);
++  const h = qa({ fields });
++  assert.equal((await h.approve()).success, true);
++  assert.equal((await h.calculate()).pensionSource.annualPension, 12_000_000);
++});
++
++test("an explicit reviewed override with a reason remains supported without silently replacing cash", async () => {
++  const fields = facts({ [labels.approved]: 11_000_000, [labels.note]: "QA override branch only: verified example basis difference, not a legal exemption claim." });
++  const h = qa({ fields });
++  assert.equal((await h.approve()).success, true);
++  assert.equal((await h.calculate()).pensionSource.annualPension, 11_000_000);
++  assert.equal(h.state.entries[0].amount.toNumber(), 12_000_000);
++  assert.equal(h.state.ledgerWrites.length, 0);
++});
++
++for (const blank of [undefined, null, ""]) {
++  test(`allowance ambiguity is not guessed when approved basis is ${String(blank)}`, async () => {
++    const changes = { [labels.medical]: 600_000, [labels.net]: 12_600_000 };
++    if (blank !== undefined) changes[labels.approved] = blank;
++    const fields = facts(changes);
++    const h = qa({ fields });
++    assert.equal((await h.approve()).success, true);
++    assert.equal(parser(h).readPensionStatementFacts({ fields }, 2026).approvedAnnual, null);
++    const calc = await h.calculate();
++    assertTaxHeld(calc.result);
++    assert.match(calc.result.note, /allowance treatment/);
++  });
++}
++
++test("choosing gross despite a stated allowance still needs a reviewed-treatment reason", async () => {
++  const fields = facts({ [labels.medical]: 600_000, [labels.net]: 12_600_000, [labels.approved]: 12_000_000 });
++  assert.equal(parser().pensionReviewNoteRequired(fields), true);
++  const h = qa({ fields });
++  assert.equal((await h.approve()).success, false);
++  fields.push({ label: labels.note, value: "QA reviewed allowance treatment for this branch; not automatic medical exemption." });
++  assert.equal((await h.edit({ fields })).success, true);
++  assert.equal((await h.approve()).success, true);
++  assert.equal((await h.calculate()).pensionSource.annualPension, 12_000_000);
++});
++
++test("net above stated pension components triggers review, never an automatic annual tax base", async () => {
++  const fields = facts({ [labels.net]: 12_500_000 });
++  const h = qa({ fields });
++  assert.equal((await h.approve()).success, true);
++  const calc = await h.calculate();
++  assertTaxHeld(calc.result);
++  assert.match(calc.result.note, /net receipts exceed/);
++  const withDecision = [...fields, { label: labels.approved, value: 12_000_000 }];
++  assert.equal(parser(h).pensionReviewNoteRequired(withDecision), true);
++});
++
++test("positive actual deduction with a checked empty tax ledger needs no artificial overlap entry", async () => {
++  const fields = facts({ [labels.deducted]: 100_000, [labels.net]: 11_900_000 });
++  const h = qa({ fields, ledgerPension: 11_900_000 });
++  assert.equal((await h.approve()).success, true);
++  const calc = await h.calculate();
++  assert.equal(calc.result.status, "ESTIMATE");
++  assert.equal(calc.pensionSource.taxAlreadyInLedger, 0);
++  assert.equal(calc.pensionSource.creditToAdd, 100_000);
++  assert.equal(calc.result.taxWithheld, 100_000);
++  assert.equal(calc.result.taxPayable, 10_000);
++  assert.equal(h.state.ledgerWrites.length, 0);
++});
++
++test("positive deduction with unknown ledger context cannot be treated as no overlap", () => {
++  const fields = facts({ [labels.deducted]: 100_000, [labels.net]: 11_900_000 });
++  assert.throws(() => parser().readReviewedPensionStatement({ fields }, 2026), /Confirm Pension Withholding Already/);
++});
++
++for (const ledgerTax of [50_000, 100_000, 200_000]) {
++  test(`positive deduction plus TAX_PAYMENT ${ledgerTax} requires reviewed overlap, not aggregate guessing`, async () => {
++    const fields = facts({ [labels.deducted]: 100_000, [labels.net]: 11_900_000 });
++    const h = qa({ fields, ledgerTax });
++    assert.equal((await h.approve()).success, true);
++    const calc = await h.calculate();
++    assertTaxHeld(calc.result);
++    assert.match(calc.result.note, /do not allocate unrelated/);
++  });
++}
++
++test("reviewed overlap counts pension withholding once and does not require a tax-base note", async () => {
++  const fields = facts({ [labels.deducted]: 100_000, [labels.net]: 11_900_000, [labels.overlap]: 100_000 });
++  const h = qa({ fields, ledgerTax: 100_000 });
++  assert.equal(parser(h).pensionReviewNoteRequired(fields), false);
++  assert.equal((await h.approve()).success, true);
++  for (let i = 0; i < 2; i++) {
++    const calc = await h.calculate();
++    assert.equal(calc.result.taxWithheld, 100_000);
++    assert.equal(calc.pensionSource.creditToAdd, 0);
++    assert.equal(calc.result.taxPayable, 10_000);
++  }
++});
++
++test("known nil pension withholding cannot overlap unrelated existing tax payments", async () => {
++  const h = qa({ ledgerTax: 100_000 });
++  assert.equal((await h.approve()).success, true);
++  const calc = await h.calculate();
++  assert.equal(calc.result.status, "ESTIMATE");
++  assert.equal(calc.pensionSource.taxDeducted, 0);
++  assert.equal(calc.pensionSource.taxAlreadyInLedger, 0);
++  assert.equal(calc.pensionSource.creditToAdd, 0);
++});
++
++for (const value of [Infinity, NaN, [], {}, false, 0, -1]) {
++  test(`provided malformed override is not an optional blank: ${String(value)}`, () => {
++    const errors = parser().getPensionStatementReviewErrors(facts({ [labels.approved]: value }), 2026);
++    assert.ok(errors.some((error) => /Approved Pension Amount.*positive/.test(error)));
++  });
++}
++
++for (const currency of ["USD", 0, true]) {
++  test(`explicit non-PKR/malformed currency ${currency} cannot masquerade as annual PKR pension`, async () => {
++    const h = qa({ fields: facts({ Currency: currency }) });
++    const approved = await h.approve();
++    assert.equal(approved.success, false);
++    assert.match(approved.error, /currency must be PKR/);
++    assert.equal(h.state.ledgerWrites.length, 0);
++  });
++}
++
++test("optional missing currency does not create a third required PDF field for explicitly labelled PKR amounts", async () => {
++  const h = qa({ fields: facts({}, ["Currency"]) });
++  assert.equal((await h.approve()).success, true);
++  assert.equal((await h.calculate()).pensionSource.annualPension, 12_000_000);
++});
++
++for (const value of [Infinity, -Infinity, NaN]) {
++  test(`review-save rejects non-finite ${value} before JSON could erase an invalid optional override`, async () => {
++    const h = qa();
++    const before = h.state.documents[0].extractedData;
++    const saved = await h.edit({ fields: facts({ [labels.approved]: value }) });
++    assert.equal(saved.success, false);
++    assert.match(saved.error, /non-finite/);
++    assert.equal(h.state.documents[0].extractedData, before);
++    assert.equal(h.state.updates.length, 0);
++  });
++}
++
++test("monthly-only source never auto-annualizes to satisfy annual gross", async () => {
++  const fields = facts({ "Gross Pension (Monthly PKR)": 1_000_000 }, [labels.gross]);
++  const h = qa({ fields });
++  assert.equal((await h.approve()).success, false);
++  assert.equal(h.state.ledgerWrites.length, 0);
++});
++
++test("12M fixture covers PDF bytes -> mocked extraction -> real approval/calculation/manual packet/PDF/desktop hold", async () => {
++  const pdfBytes = fs.readFileSync(path.join(root, "test-fixtures/pension/SYNTHETIC-Pension-12M-TY2026.pdf"));
++  const response = { documentType: "pension_statement", fields: facts().map((f) => ({ ...f, confidence: 0.99 })), transactions: [], notes: [] };
++  const h = qa({ status: "PENDING", modelResponse: response, extractionFileBuffer: pdfBytes });
++  Object.assign(h.state.documents[0], { extractedData: null, mimeType: "application/pdf", fileUrl: "/uploads/synthetic-pension.pdf", extractionStartedAt: null });
++  const prior = process.env.GEMINI_API_KEY;
++  process.env.GEMINI_API_KEY = "offline-qa-key-never-sent-to-network";
++  let extracted;
++  try { extracted = await h.extract(); }
++  finally { if (prior === undefined) delete process.env.GEMINI_API_KEY; else process.env.GEMINI_API_KEY = prior; }
++  assert.equal(extracted.success, true, extracted.error);
++  assert.equal(h.state.fileReads.length, 1);
++  assert.equal(h.state.modelCalls.length, 1);
++  const filePart = h.state.modelCalls[0].find((part) => part.inlineData);
++  assert.equal(filePart.inlineData.data, pdfBytes.toString("base64"));
++  assert.equal(extracted.extracted.fields.some((f) => reviewLabels.includes(f.label)), false);
++  assert.equal((await h.calculate()).result.status, "NEEDS_RULES"); // Human approval still required.
++  assert.equal((await h.approve()).success, true);
++  const calc = await h.calculate();
++  assert.equal(calc.result.taxDue, 110_000);
++  assert.equal(calc.result.taxPayable, 110_000);
++  assert.equal((await h.completeness()).success, true);
++  const defaultPacket = await h.generate();
++  assert.equal(defaultPacket.success, false);
++  assert.match(defaultPacket.error, /pension/i);
++  const manualPacket = await h.generate({ acceptUnmappedPortalSources: true });
++  assert.equal(manualPacket.success, true, manualPacket.error);
++  const snapshot = JSON.parse(h.state.packets.at(-1).snapshotJson);
++  assert.equal(snapshot.coverage.mode, "partial_manual_entry_required");
++  assert.equal(snapshot.pension.annualPension, 12_000_000);
++  assert.equal(snapshot.pension.reviewNote, "");
++  assert.equal(snapshot.portalFieldMap.mappingGaps.pensionManualReview.taxDue, 110_000);
++  assert.equal(snapshot.portalFieldMap.mappingGaps.pensionManualReview.taxDeducted, 0);
++  const flat = h.load("lib/tax/portal-field-map.ts").flattenPortalFieldMap(snapshot.portalFieldMap);
++  assert.equal(flat.some((f) => ["64020007", "923184"].includes(f.irisCode)), false);
++  const hold = pensionEntryHold({ ...snapshot, portalFieldMapDetailed: snapshot.portalFieldMap, portalFieldMap: flat });
++  assert.equal(hold.paused, true);
++  assert.equal(hold.result.readyToSubmit, false);
++  assert.equal(hold.result.submitted, false);
++  const exported = await h.load("app/actions/packet.ts").generateFilingPacketPdfAction("qa-draft");
++  assert.equal(exported.success, true, exported.error);
++  assert.equal(h.state.pdfBuffer.subarray(0, 5).toString(), "%PDF-");
++  assert.equal(h.state.ledgerWrites.length, 0);
++});
+diff --git a/test-fixtures/pension/README.md b/test-fixtures/pension/README.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..e32022bc184110df7ddfbca3b970a075c7e1ad47
+--- /dev/null
++++ b/test-fixtures/pension/README.md
+@@ -0,0 +1,144 @@
++# Pension review update + PKR 12,000,000 QA statement
++
++- **Date:** 19 October 2026
++- **Base repository commit:** `92adebbc1283de828229164414615efb7f901ce8`
++- **Status:** Local code implemented and tested. No push, deployment, migration or live FBR submission performed.
++
++> Yeh tamam figures fictional hain. PDF sirf isolated QA/staging ke liye hai — real return, identity verification, loan application ya FBR/IRIS submission ke liye nahin.
++
++## 1. Review Note ka final decision
++
++**Pension Tax Base Review Note routine statement ke liye mandatory nahin hai.** Is ko normal printed-facts grid se nikaal kar conditional reviewer panel mein rakha gaya hai.
++
++| Stage | Required / conditional policy |
++|---|---|
++| Statement facts ki approval | Matching **Tax Year** aur positive **Gross Pension (Annual PKR)** always required. Monthly/net amount annual gross ka substitute nahin. |
++| Standard gross-only statement | Approved pension amount dobara type karna, review note aur artificial ledger-overlap entry zaroori nahin. Reviewed annual gross basis use hoti hai. |
++| Missing actual withholding | Facts approve ho sakte hain, lekin final tax, payable/refund aur packet hold rehte hain. Missing withholding **zero nahin** banti. Verified 0 ya verified actual deduction enter karni hogi. |
++| Manual tax-base override | Gross se different approved basis par reason required hai: at least five characters; actual treatment ko meaningfully explain karein. |
++| Non-zero medical / material source mismatch | Tax base automatically decide nahin hoti. Explicit reviewed basis aur reason chahiye, including when reviewer chooses gross. Neither automatic medical exemption nor automatic inclusion. |
++| Pension withholding overlap | Confirmed actual deduction 0 ho, ya positive deduction ke saath checked current tax ledger total 0 ho, to overlap safely 0 resolve hota hai. Positive deduction + existing/unknown tax ledger par reviewed allocation chahiye. Aggregate TAX_PAYMENT entries ko pension withholding samajh kar allocate nahin kiya jata. |
++| Optional printed details | Name, PPO, net, medical, DOB/CNIC and currency may remain optional. Provided recognised values still validate: invalid amounts, duplicate facts, invalid identity dates, mismatches and non-PKR currency are rejected. |
++
++Aapke original screenshot mein **medical allowance 504,000** non-zero tha. Us case mein allowance treatment ka genuine review ab bhi chahiye; sirf routine note ki condition hatayi gayi hai. Gross + medical = net hone se legal pension tax base automatically prove nahin hoti.
++
++Frontend markers, textarea attributes, Save & Approve Map validation and server-side readers ab isi staged policy ko follow karte hain. Draft saves incomplete data retain kar sakti hain; approval/tax readiness gates alag hain. Non-finite supplied numbers save se pehle reject hote hain, taake JSON unhein null bana kar invalid override erase na kare. Missing fact par confidence badge nahin dikhaya jata. Optional reviewer fields absent hon to UI unhein add/edit kar sakti hai; human edits quoted-model evidence ko reuse nahin kartin.
++
++## 2. Uploadable pension PDF
++
++**File:** `SYNTHETIC-Pension-12M-TY2026.pdf`
++
++| Printed fact | Amount / value |
++|---|---:|
++| Tax Year | 2026 |
++| Reporting period | 1 July 2025 – 30 June 2026 |
++| Monthly gross pension | PKR 1,000,000 |
++| Annual gross pension | **PKR 12,000,000** |
++| Medical allowance, annual | Explicit **PKR 0** |
++| Actual pension tax deducted, annual | Explicit **PKR 0** |
++| Annual net pension paid | PKR 12,000,000 |
++| Payment schedule | All twelve months printed |
++
++Fictional pensioner/issuer/PPO hain. No government emblem, real signature, CNIC or DOB is printed. PDF mein app-only Approved Pension Amount, Ledger Overlap aur Review Note print nahin kiye gaye — validator pass karwane ke liye artificial review fields add nahin kiye.
++
++`above-10m-ty2026.json` mein expected extraction, setup and current-engine results hain. AI extra optional fields la sakta hai; important annual values ko original PDF se verify karein. Annual amount **12M**, monthly amount **1M** hai — inhein swap na karein.
++
++## 3. Staging UI test — reproducible main scenario
++
++1. **Isolated QA account / staging database** use karein. Real taxpayer profile ko test DOB ya test assets se replace na karein.
++2. TY **2026**, resident / myself filing, **pension only** select karein. No salary, rent, bank profit, unrelated tax credit or other route in this reference scenario.
++3. Former employer / associate employment question ka answer **No** rakhein. Yeh PDF se infer nahin hota; intake mein alag decision hai.
++4. Test profile DOB **1962-03-15** rakhein, with separately approved QA identity/profile prerequisites. PDF se DOB/profile overwrite nahin hota. Above-10M scenario mein age confirmation important hai; unknown age ya 70+ profile ka result reference case se different ho sakta hai.
++5. Upload `SYNTHETIC-Pension-12M-TY2026.pdf`, extract, original ko dekh kar annual facts verify karein. Printed tax deducted **0** hai — calculated liability ko deduction field mein enter na karein.
++6. Standard case mein advanced Approved Amount / Ledger Overlap / Review Note blank rehne dein. Tax Year aur Gross Pension required markers hon; Save & Approve Map artificial note ki wajah se disabled na ho.
++7. **Save & Approve Map** press karein. Approval facts ko confirm karti hai; final tax readiness phir independently check hoti hai. Pension mapping koi duplicate cash-income row nahin banati.
++8. Cash/bank/wealth prerequisites bhi separately complete karein. If every payment is retained: opening wealth/bank **0**, pension cash inflow **12M**, annual expenses **0**, closing bank/wealth **12M**. Existing bank imports ki pension entries dobara manually add na karein.
++9. Actual TAX_PAYMENT ledger total is **0** in this reference case. Recalculate Tax, verify the results below, then try packet generation.
++10. Above-10M standard pension ka default automatic portal packet **hold/block** expected hai. App ka explicit manual-coverage option use karne par partial/manual packet aur review PDF mil sakte hain. Woh complete auto-entry packet ya submission approval nahin hai.
++
++**Ek pension statement poore filing data ka substitute nahin:** CNIC/profile, bank statements/import, classification, expenses, wealth and reconciliation apni supporting QA inputs maangte hain. Is pack mein pension document hai, matching bank statement ya CNIC nahin. Offline test harness in dependencies ko doubles/seed data se provide karta hai; real bank/profile workflow live verify nahin hua.
++
++## 4. Expected current-engine result
++
++For this specific **No + below-70 confirmed profile + pension-only + nil withholding** scenario:
++
++| Result | PKR |
++|---|---:|
++| Reviewed pension tax source | **12,000,000** |
++| Excess used by current rule | 2,000,000 |
++| Base tax: 5% × 2,000,000 | 100,000 |
++| Current-engine surcharge: 10% × base tax | 10,000 |
++| Total estimated liability | **110,000** |
++| Actual tax withheld | **0** |
++| Tax payable | **110,000** |
++| Refund | **0** |
++
++These are the repository's **existing TY2026 rule expectations**, not independent legal certification. Medical treatment, age-date rules and surcharge law were not re-certified for this change. Tax pricing rules were not changed.
++
++The PDF correctly prints actual withholding **0**, not estimated tax **110,000**. It intentionally tests a payable-tax case.
++
++## 5. Expected safeguards / negative tests
++
++- Clear tax deducted in staging review: document facts can still be approved; calculation becomes `NEEDS_RULES`, with tax/payable/refund **null**, and packet generation stays blocked. Unknown is not zero.
++- Manual approved amount different from gross without reason: UI and backend refuse approval. Same ordinary gross amount re-entered is not an override.
++- Non-zero medical or net receipts above the stated components: facts can be reviewed; final tax needs an explicit basis and reason. No annual net-to-gross substitution.
++- Positive pension deduction with current tax ledger 0: no overlap retyping required. With positive existing ledger: no blind allocation; resolve actual overlap first.
++- Invalid amount, duplicate recognised field, wrong TY, foreign currency or identity mismatch: reject; do not silently repair the source.
++- A monthly-only slip does not become an annual amount through ×12 or by copying net.
++- Editing an approved pension source makes local approval pending; saving/reapproval invalidates downstream calculation/packet/jobs. Recalculate and generate a fresh packet.
++- Pension-review policy is included in the source fingerprint (`pension-review-v2-conditional-note`), so pre-update pension packets must be refreshed rather than trusted under changed semantics.
++- **Manual IRIS hold remains enabled.** Above-10M full-pension-versus-excess mapping and surcharge remain manually reviewed. Desktop must not auto-fill/submit unsupported pension fields or deduct 10M twice.
++
++## 6. Verification performed
++
++| Verification | Result |
++|---|---|
++| `npm run verify:pension-review` | **216 / 216 tests passed** |
++| `tsc --noEmit --incremental false` | Pass, no errors |
++| `npm run lint` | Pass, **19 pre-existing React-hook warnings** |
++| `node scripts/sanity-pension-yes-no.cjs` | Pass, 19 assertions |
++| `node scripts/verify-ty2026-tax-calculation.cjs` | Pass |
++| Salary-certificate field/gross-source checks | Pass |
++| Document extraction lease/recovery checks | Pass |
++| PDF inspection | 1 page; annual values/explicit zeroes/months readable; fictional marking present; no internal review fields; visually inspected |
++
++The targeted suite includes the actual PDF-byte read and provider-request payload with **mocked model response**, real server approval, parser/source resolver, calculation, manual packet, review-PDF generation and desktop hold. It also tests optional-field additions through a real React hook/JSDOM harness.
++
++**Not performed:** live Google/Gemini extraction, real database writes, real bank reconciliation, production browser session, native Electron execution or any FBR/IRIS portal submission. Session/database/provider/reconciliation dependencies in action tests are mocked. No claim of full live end-to-end completion. `verify:all` was not used; unrelated pre-existing integration/stale-harness findings are outside this change.
++
++## 7. Developer commands
++
++From the repository root, after normal dependency setup:
++
++```bash
++npm ci --ignore-scripts --no-audit --no-fund
++npx prisma generate
++npm run fixture:pension-12m
++npm run verify:pension-review
++npx tsc --noEmit --incremental false
++npm run lint
++```
++
++No schema migration or dependency version changes were needed. `fixture:pension-12m` uses the existing `pdfkit` dependency. `verify:pension-review` runs the new policy regressions plus pension statement, pension prefill and shared document-review tests.
++
++**Local code vs live app:** workspace changes do not automatically update a deployed website or desktop build. Apply/review the included patch (or use the modified workspace source), run tests, then deploy through your normal process. For the patch's exact base commit:
++
++```bash
++git apply --check pension-review.patch
++git apply pension-review.patch
++npm run verify:pension-review
++```
++
++If `--check` fails on another revision, do not force it; review/merge the changes against that revision. Recalculate affected pensions and regenerate/reapprove old packets after deployment.
++
++## 8. Implementation map
++
++- `lib/tax/pension-statement-fields.ts`: facts vs tax-ready readers; conditional reason; unknown withholding preservation; no routine app-field injection; material mismatch/currency validation.
++- `lib/tax/document-review-required.ts`: passes actual fields into conditional Required-marker policy.
++- `app/actions/extraction.ts`: printed-facts-only extraction prompt; transaction-safe facts approval; identity/ledger bounds retained.
++- `lib/tax/pension-source.ts`: strict readiness with current ledger context; policy-aware fingerprint.
++- `components/tax/filing/pension-tax-review-panel.tsx`: separate conditional reviewer controls and readiness guidance.
++- Document hook, wizard and document step: adds absent optional decisions, clears stale evidence, resets approval/downstream state and removes hardcoded required note.
++- `app/actions/packet.ts`: meaningful gross-basis description when no override note; manual portal warning retained.
++- Regression scripts, fixture JSON/PDF/generator and npm verification commands.
++- Shared source-wiring test: made one whitespace-sensitive assertion tolerant of existing multiline code; no unrelated business-rule test was removed.
+diff --git a/test-fixtures/pension/SYNTHETIC-Pension-12M-TY2026.pdf b/test-fixtures/pension/SYNTHETIC-Pension-12M-TY2026.pdf
+new file mode 100644
+index 0000000000000000000000000000000000000000..46ceb7b679008ba5d12f414f6bb8c0eb9c02bab6
+GIT binary patch
+literal 3944
+zcmbW42{@GN9>7B#8fB?u$?%nJ#F%}oC%f#)RvJrV<};?ojAq8#BGko|lB`LkM4S{6
+zP0MXn*>X}sDxpOrp_8;6_x&)BPVTw)dG0*VeDl5k_rJaW_y5lGdv!eQ9Iyl<5=v(h
+zd{D*^9^wUWL0MR!aNaTDFog4<vtSf>@?owJB7kX66wVE1vgtOwXo!Xf0*Wcch-d<t
+zkO@X6rU59NEsrY%$^wWot?da5coBRCEP$xf0v`d)_u;aEJJgyrD45GcA|i9*$R2zi
+z!wVKdG#tnd!g<5dLI~#+1~Rdk`L&(-bpr7mKs*RZ*ntR{Oh<4aK&De~z(2@`!{d8}
+z(-|<L1thaUkqpH_U12Uu7zz;ycoJ~M<_KXvgmd7~g|HpW;4xvuOd#aL^e|NPk!Sv0
+z+?N*>cMhL>A-}I?;~Ck7D&H&eWz&=9)qlp`yLHycad+Olddd1>Y5RdzeyYX+<@d#l
+zrMOPmloF$ovU|F3(I(-?u1G1@M-fDS4yIhO-4?X2=@GrU52qJ0wA*53r>UT!`?j1d
+zGXOV#_{+l`uKJeQ2RfrxPxPdYR}{Qjp6kymCyH<-6<0I;(^FZA9WGzJ6t?!K?&QkU
+z-1YE3c--=P-^W|ScP9U=(wzKqS2JL8u-?3X386@4Wg#miLGDujRg`}CJ{6TiUoT9y
+zvtvgMg^SiK3@v(*xT-4A=$)pvG&+-~kBxd$`@QSQzkL5Va9}KA7-QyE>NTu!?dY!0
+zQfBh+x0!t(ikH$;%fl=otv|8*`cVtXg*y9PoA%w7kum9vQ)8Q%OO9X996qd~Xo6qb
+zYLy}-?M!|U9r+<@{By~}Va;`Mq6}q^a}i3Bqp>)-OF92kxm{|tRz+FWOYvZ?R*ag;
+zX=7`ZWVXN6sv`wShKu_;3(*AWLvCN~l_y@u=f#e)az>xoOY43g;}>te_1?%saw!^j
+zn_87LtYE&8RGpk=(l`WXJ}45%H}uxsj<1q^p|J;k1Uc!dx>@LqINv0`<n{X<yt(vN
+zso&eu9NV?$NtL^jtkS9GU)uJsa$3Z82za?(AxOKmdh=S3W!cc76X~Kes!MttHGAQ7
+zr!j$=f;PO<if}f1!agHp=;h$)Gms%?JeYYrNQE#|ZQpN^q~4QIr)gffQ3qXe+{37;
+zu#ps1d}B{nR<*sU_O-pH+5=4t=u&FV%F_H5=WjhfT$`vq@Ond+Xm8cff{CV_P!@KV
+zzO+H^ke`&fix52`*B8)WR2kTk6S>mhv$M<&+O-q?c7<cwsX=w7^WXPMj1(*kGf};q
+z8J^a*>z7Tz50v}`_NkAT@#ok6cJzxLH)cD0QhjxPyl&&FCb9yxklR5#*-bpj-kv)m
+zCm}U|QG#uS`abeglHK`7JM!+|r^#uxJn*F5_esh9c6BV19@0%{9B41x9Vpz+OVcnv
+zBf?~oHTk_Ic3SL}s~EaZ$0kN~%l-&YCpK?T?0@6gj-fT=UkForwp+nw_cL@~?A@_X
+z(Wzh3?DzL-#He8dkDysC#iI0jIA4kRTp6dyXBLUn(4m;XmWi$cvgp!=yBmpmmnZjK
+z^SN0v(PaL0`!<DOv$BBBEqTngl!`WDtWW96<mB2*{i=eU%FBz5LQl{8;;ZO`P32!h
+zDW^%t6^%%_`)A2TvU!Qllx>N(Z)nJ0@-8xq(q^`9&g$LPmNs(H#?s^Y5d2V1Dnw#^
+z`_a9}wlB|~S1G?auJKJ)W$B~qrv}}9rEK-y$K{;=_Hkl<zz(&_Li2Q^p+rkji{<x;
+zj}saWCH?Yc3y5Z$+O?OFGI9cALD{Oddti?}PD_WLR*$58mbCv}t1l>j)7zVmoOz4^
+zQK7t&RdUbi(LEVepL&AtGhE{J0<|PxT{(W_Yn`d>73sUd(RmET53e^yj?#mZE!9#_
+zuJ0g*!s#KRfj675*f$Av9j(S1e%aN*z1N849_g|<GJLI^=)_=S40`$H#E2JTyE&F#
+z1rKWn15nfim(07E3Focb%C9KMOX<CHJ?v989I$r>``pd#3*7nf!olBqS~r}$ar%Vz
+z$XV`tuYS+7v2xZLnMrq=FWWe{p)E_=1GYV!_X2vNQ~Kh9wrab&{sz<Y65kf-DEls3
+z!;)O_Jli{-gAUm!yGpY=&f3oCxKJ$uo%lA|_g;^}odQ1%a~|WB(!Cp&`Hft66~WT-
+zt)K6Iz>pUo*xB#comQFVq;Mdw`di?g6Xk?bNfF`IS=X`~VSAjyZqo8TnlWgtTAw#M
+z$uCteOGvCpXp?YzQ2k5o`oq3GHP#Ouda&f3dUvSH^)>Xa)T1UJn|Mof<!;&_*Y<*X
+zvyj?Tt{z)ZiEZn&tCP<f$ldQ`cGfb>ajSQ^6*sGlaxu;0f?KqKPj?bXp^)eq%<wOy
+z$oX8S7C+9i1+(F&!E90>>)qx<xgQcwnFp!v$x9+NR`=#K*IrWcF-WJK+On9d<sG*4
+zxpUh%ox@n7K5pyuxVxc}qU!@07eCE%0$%W?z{{aP7RM!)dhmmm&aavVQiR0lu(Tpd
+zMOsERs&;V(6~$Zm)|^nY&2e>~c3|PJ{~-sCi*O{-&3D9GH9@t;zO;P(1xb-l+2a>f
+zn>MgY@12@=sJcC4ecIhsMnk@?Wma5Qk-?!Y;VbB#`5%0Buio#d$&$E94SMFzB?f(O
+zjtX_W`vqh0h|-~^*LC7Xh*?~N?6C~jo;T<BEU-S>q?gSz%x+jqMQ3jz#g>=u&}&IC
+zUhQ~{=IGo?TUC581B<RxnYVO5OHb9!uMFn3U~_I11-{}8+Gvi_+GAe5a$9@Z{pB;Q
+z<;(Q7hO=Z_%gbTK1Gjf{WAq#2^joexz4fV}!npVOsX%4{CSXY%jP}ZYEmDYa(m&ly
+zcu(4=AM}SzP1qgDU9{~P_T$cDiY%pfz9q{pR>l9LdC_41({vUw%vrN8QbMK^qubAX
+zrk1B%`$Qy@aJ=Z9ZOw`#%2n$8oU<1U51`L=DC2yKJL}y##%pL39elYsGV5Ecbn=xX
+zd3NWGq{O#LzC*0kvC)&4n~5z)7UzE&qpse2ysl8MKKnaUKW6g$XtE>y>9=&Zpj#84
+z-gUg%8rSo(bD%Sod{@@9#uxYG;+r*O3|b0j(MoB6oBLg(3b7SKktx4_J65|mG#jlG
+z*(JXiHcm;sT+_^Y#GxB}PW?5ZyR>gIldb5Dpw0|I%s>wT0V)JQFaUI1*g}0V4H1Zc
+zH$f6l*qIUWL@M4GPr*-pHq9E7#X4So?%s~}-cGjAdTVH%yQ?3Bg{-;U2s#JyfVl!T
+zj|+JT0pWxpaEFDw{ScSn#lyuDA`lIMU*tRMSj<ZpZ+bN3$zyB<kOn+Eu%m?$d;oa<
+z7zZ{(2;9;+{`#|KVz$G$^Mp_cj}HkVg2UJXB)%cUW`f}C5H^F37#cz$Y%ZP4V1pDR
+z1h63lwBblZ2jCko1OoiUf!JIIFASdbFQ!(EAciXpg@tSe;$|ihLr4e<gb<T1q#Huv
+z)2lX|S*jse<#hFCogoN0wI%<hzzFt=xe>rBGlBtNacVOG9ovE&g&^&zJrs|@((FK?
+zAp)|0K<LdDa=-}LDKN5*5QZWaGsNr_5xfOv06v}pW*0anipOUPAOf;dpzp?GPJ5f?
+z-C3YTs8^iWG`}NsjKbN_1@IIn;~Zg5BvK(d3J1anrx+j6B%pBipsY+bmj&TAu({Tt
+zJ;Z_^h*?~n*$cwo2Ef|zIL!YqinxKNd41-vh&z8av@O_E4v&RgPgtP)W^O0$^e`|$
+z4v^;$iHlF#to4);ay^JZZZ;^K3ma6JHdWz(9}LAO5izs_og_eR5fFr%4nspt>CWyz
+zG#?H@;UR)4YPzwICq$)CNE9dpnvs!6c(Bt`Gu&Aj6-4?;MkIqp|12ZU(Zdrdpkja3
+z!xKngDL={ZNQeDZMgk{bjtozn6PIX01<mzWTaexyTOye<CkByhGFOj+boWpGsB`N=
+zq*CYF8dK)lnvj0TS;(ieIWT|f9_z)91t-lEh4bWrzaONFzzK5VhVUQ)@H{oJgJ>2o
+z$%G11f{jfG6b6~epu$w9F`YyvFo_g8o@hc?1O0E6sa_BW>3rc-8<5C&Q<RR5{W=HK
+FzX3mH>T>`9
+
+literal 0
+HcmV?d00001
+
+diff --git a/test-fixtures/pension/above-10m-ty2026.json b/test-fixtures/pension/above-10m-ty2026.json
+new file mode 100644
+index 0000000000000000000000000000000000000000..f3e073dfd9602f23890c3e92af64bd3fd233ce33
+--- /dev/null
++++ b/test-fixtures/pension/above-10m-ty2026.json
+@@ -0,0 +1,67 @@
++{
++  "fixtureId": "pension-12m-ty2026-nil-withholding-v1",
++  "synthetic": true,
++  "notForSubmission": true,
++  "description": "Fictional annual pension statement with printed facts only; no app tax-base or ledger-review fields.",
++  "issuer": "Example Pension Trust | QA Simulator",
++  "pensionerName": "QA PENSIONER (FICTIONAL)",
++  "ppoNumber": "QA-PPO-2026-012M",
++  "preparedDate": "2026-07-05",
++  "taxYear": 2026,
++  "periodStart": "2025-07-01",
++  "periodEnd": "2026-06-30",
++  "currency": "PKR",
++  "monthlyGross": 1000000,
++  "annualGross": 12000000,
++  "annualMedical": 0,
++  "annualTaxDeducted": 0,
++  "annualNetPaid": 12000000,
++  "printedIdentity": {
++    "cnic": null,
++    "dateOfBirth": null,
++    "reason": "No CNIC or DOB is printed: verified identity/profile is an independent test prerequisite."
++  },
++  "expectedExtraction": {
++    "fields": [
++      { "label": "Tax Year", "value": 2026 },
++      { "label": "Gross Pension (Annual PKR)", "value": 12000000 },
++      { "label": "Medical Allowance (Annual PKR)", "value": 0 },
++      { "label": "Pension Tax Deducted (Annual PKR)", "value": 0 },
++      { "label": "Net Pension Payable (Annual PKR)", "value": 12000000 },
++      { "label": "Pensioner Name", "value": "QA PENSIONER (FICTIONAL)" },
++      { "label": "PPO Number", "value": "QA-PPO-2026-012M" },
++      { "label": "Reporting Period Start", "value": "2025-07-01" },
++      { "label": "Reporting Period End", "value": "2026-06-30" },
++      { "label": "Currency", "value": "PKR" }
++    ]
++  },
++  "testSetup": {
++    "isolatedQaAccountOnly": true,
++    "profileDateOfBirth": "1962-03-15",
++    "residencyStatus": "resident",
++    "filerType": "myself",
++    "worksForFormerEmployerOrAssociate": false,
++    "incomeSources": ["pension"],
++    "otherIncome": 0,
++    "taxPaymentLedgerTotal": 0,
++    "openingWealth": 0,
++    "annualExpenses": 0,
++    "closingBankBalanceIfAllPaymentsRetained": 12000000,
++    "netWealthChangeIfAllPaymentsRetained": 12000000
++  },
++  "expectedCurrentEngine": {
++    "status": "ESTIMATE",
++    "annualPensionForTax": 12000000,
++    "baseTax": 100000,
++    "surcharge": 10000,
++    "taxDue": 110000,
++    "taxWithheld": 0,
++    "taxPayable": 110000,
++    "refundDue": 0,
++    "incomeLedgerWritesByPensionMapping": 0,
++    "defaultPortalPacketBlocked": true,
++    "explicitManualPacketPermitted": true,
++    "desktopAutoEntryBlocked": true,
++    "legalDisclaimer": "Expected behavior of the repository's current TY2026 rules, not independent tax-law certification."
++  }
++}

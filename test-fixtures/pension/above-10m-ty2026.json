@@ -1,0 +1,67 @@
+{
+  "fixtureId": "pension-12m-ty2026-nil-withholding-v1",
+  "synthetic": true,
+  "notForSubmission": true,
+  "description": "Fictional annual pension statement with printed facts only; no app tax-base or ledger-review fields.",
+  "issuer": "Example Pension Trust | QA Simulator",
+  "pensionerName": "QA PENSIONER (FICTIONAL)",
+  "ppoNumber": "QA-PPO-2026-012M",
+  "preparedDate": "2026-07-05",
+  "taxYear": 2026,
+  "periodStart": "2025-07-01",
+  "periodEnd": "2026-06-30",
+  "currency": "PKR",
+  "monthlyGross": 1000000,
+  "annualGross": 12000000,
+  "annualMedical": 0,
+  "annualTaxDeducted": 0,
+  "annualNetPaid": 12000000,
+  "printedIdentity": {
+    "cnic": null,
+    "dateOfBirth": null,
+    "reason": "No CNIC or DOB is printed: verified identity/profile is an independent test prerequisite."
+  },
+  "expectedExtraction": {
+    "fields": [
+      { "label": "Tax Year", "value": 2026 },
+      { "label": "Gross Pension (Annual PKR)", "value": 12000000 },
+      { "label": "Medical Allowance (Annual PKR)", "value": 0 },
+      { "label": "Pension Tax Deducted (Annual PKR)", "value": 0 },
+      { "label": "Net Pension Payable (Annual PKR)", "value": 12000000 },
+      { "label": "Pensioner Name", "value": "QA PENSIONER (FICTIONAL)" },
+      { "label": "PPO Number", "value": "QA-PPO-2026-012M" },
+      { "label": "Reporting Period Start", "value": "2025-07-01" },
+      { "label": "Reporting Period End", "value": "2026-06-30" },
+      { "label": "Currency", "value": "PKR" }
+    ]
+  },
+  "testSetup": {
+    "isolatedQaAccountOnly": true,
+    "profileDateOfBirth": "1962-03-15",
+    "residencyStatus": "resident",
+    "filerType": "myself",
+    "worksForFormerEmployerOrAssociate": false,
+    "incomeSources": ["pension"],
+    "otherIncome": 0,
+    "taxPaymentLedgerTotal": 0,
+    "openingWealth": 0,
+    "annualExpenses": 0,
+    "closingBankBalanceIfAllPaymentsRetained": 12000000,
+    "netWealthChangeIfAllPaymentsRetained": 12000000
+  },
+  "expectedCurrentEngine": {
+    "status": "ESTIMATE",
+    "annualPensionForTax": 12000000,
+    "baseTax": 100000,
+    "surcharge": 10000,
+    "taxDue": 110000,
+    "taxWithheld": 0,
+    "taxPayable": 110000,
+    "refundDue": 0,
+    "incomeLedgerWritesByPensionMapping": 0,
+    "defaultPortalPacketBlocked": true,
+    "explicitManualPacketPermitted": true,
+    "desktopAutoEntryBlocked": true,
+    "legalDisclaimer": "Expected behavior of the repository's current TY2026 rules, not independent tax-law certification."
+  }
+}

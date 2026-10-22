@@ -1,0 +1,1365 @@
+diff --git a/app/actions/extraction.ts b/app/actions/extraction.ts
+index 01f4d28..a829f4c 100644
+--- a/app/actions/extraction.ts
++++ b/app/actions/extraction.ts
+@@ -14,6 +14,12 @@ import {
+   readBusinessPurchaseBasisEvidence,
+   applyBusinessPurchaseBasisEvidence,
+ } from "@/lib/tax/business-schedule-fields";
++import {
++  ensureBankProfitCertificateReviewFields,
++  getBankProfitCertificateReviewErrors,
++  readApprovedBankProfitCertificate,
++} from "@/lib/tax/bank-profit-certificate-fields";
++import { invalidateFilingForDocumentChange } from "@/lib/tax/document-invalidation";
+ 
+ import {
+   ensureBusinessBalanceReviewFields,
+@@ -75,6 +81,8 @@ function ensureReviewFields(documentType: string, extracted: unknown): unknown {
+     review = ensureSalaryCertificateReviewFields(extracted);
+   if (documentType === "bank_statement")
+     review = ensureBankStatementReviewFields(extracted);
++  if (documentType === "bank_certificate")
++    review = ensureBankProfitCertificateReviewFields(review);
+   if (documentType === "business_balance_sheet")
+     review = ensureBusinessBalanceReviewFields(extracted);
+   if (documentType === "business_books")
+@@ -116,7 +124,7 @@ For a bank statement, always return separate fields labelled exactly "Bank Name"
+ For a CNIC, always return separate fields labelled exactly "CNIC Number", "Name", "Father Name", "Date of Birth" and "Expiry Date", plus "Address" when the card prints one. Return "Date of Birth" and "Expiry Date" as ISO YYYY-MM-DD. Read the date of birth from the "Date of Birth" line only: never use the issue date or the expiry date for it, and never guess a date of birth that is not printed on the card. For "Expiry Date" return the card's own validity/expiry line ("Valid Upto", "Expiry", "Date of Expiry"), or null when the card prints none — never infer one from the issue date.
+ For a business balance sheet, use these exact separate field labels: ${Object.values(BUSINESS_BALANCE_LABELS).join(", ")}. Use PKR closing balances only when printed. Balance Sheet Date must be YYYY-MM-DD; do not infer Tax Year, currency, business identity, zero amounts, totals, or missing categories. Keep unknown values null. Never classify business bank balance as business cash. Never combine total assets with individual asset amounts. For other details preserve additional optional fields and notes.
+ For a pension statement, keep printed annual gross pension, annual medical allowance, annual net pension payable, actual annual pension tax deducted, Tax Year, Date of Birth and Pensioner CNIC as separate facts. Use exact labels "Gross Pension (Annual PKR)", "Medical Allowance (Annual PKR)", "Net Pension Payable (Annual PKR)", "Pension Tax Deducted (Annual PKR)", "Tax Year", "Date of Birth" and "Pensioner CNIC". Never confuse monthly and annual columns, gross and net, or deductions with tax chargeable. Never annualize a monthly number when no annual total is printed. Never infer missing tax deducted as zero. For "Approved Pension Amount for Tax (Annual PKR)", "Pension Withholding Already in Tax Ledger (Annual PKR)" and "Pension Tax Base Review Note", copy a value ONLY when the original document explicitly prints that separately labelled value. For each of these three fields, also include an extra string property "sourceEvidence" containing the exact printed field label followed by its exact printed value (a colon or newline may separate them); include the entire printed review-note paragraph, not a generated summary. These are unapproved suggestions only: the human must review and press Save & Approve Map before they become the tax source. Never infer, calculate or invent the approved tax base, allowance treatment, ledger overlap or review note from gross/net amounts, bank receipts or other figures. If the exact labelled value is not printed, is unclear or conflicts with another printed value, return null with confidence 0 and no sourceEvidence. An explicit printed 0 may be copied as a suggestion; missing is never 0. Do not claim that quoted text verifies any real TAX_PAYMENT ledger or proves human approval. Do not treat medical allowance as automatically taxable or exempt. Return printed dates as ISO YYYY-MM-DD; never overwrite the taxpayer profile from this document.
+-For a salary certificate, always return separate required fields labelled exactly "Gross Salary (Annual PKR)", "Tax Deducted u/s 149 (Annual PKR)", "Employer Name (as registered with FBR)" and "Tax Year". "Tax Year" is the four-digit tax year the certificate is for (for example 2026 for July 2025 to June 2026); when only the salary period is printed, the tax year is the year in which that period ends; return null when neither is printed. The employer name is the company's full legal name exactly as printed on the certificate letterhead or body (for example "ACME (PRIVATE) LIMITED"); return null when it is not printed. Return the employer NTN, when printed, as a separate optional field labelled "Employer NTN". Use annual amounts explicitly stated on the certificate. If a value is not stated or cannot be read, return null; never infer gross salary from net bank deposits and never assume missing tax withheld is zero. Also preserve other tax-relevant details as separate optional fields when printed, including employee name/ID, salary period, basic pay, allowances, bonuses, benefits/perquisites, exempt or taxable components, and net pay. Do not invent missing details, combine separate components, or annualize monthly amounts unless the certificate explicitly states the annual total.`;
++For a bank profit certificate, always return separate fields labelled exactly "Tax Year", "Reporting Period Start", "Reporting Period End", "Bank / Financial Institution Name", "Bank NTN", "Taxpayer Name", "Taxpayer CNIC", "Taxpayer NTN", "Account Number", "IBAN", "Instrument / Category", "Printed Section / Subsection", "Gross Annual Profit / Yield", "Tax Deducted / Withheld", "Bank-applied Withholding Rate (%)", "ATL / Non-ATL Status", "Net Profit Credited", "Currency", "Sukuk Holder Type (Company / Individual / AOP)" and "Sukuk Return Band (Above / Below PKR 1M)". Read each value only when printed on this certificate; when absent or unreadable return null, never guess or replace it with zero. Keep gross annual profit, tax deducted and net credited as three separate printed amounts; do not calculate one from the others. Return the bank-applied withholding rate and ATL/Non-ATL status exactly as printed; do not convert a printed rate into a rate-card choice or infer status. Copy the printed Section/subsection wording exactly; do not map it to a tax rule. Keep bank NTN separate from taxpayer NTN, and account number separate from IBAN; never construct an identifier from another field. Return reporting dates as ISO YYYY-MM-DD and Tax Year only when stated. For Sukuk, copy holder type and return band only when printed; otherwise return null. Preserve other tax-relevant details as additional fields, but never infer legal tax treatment, a taxpayer's filing status, or missing values. The human must verify/correct the fields and explicitly Save & Approve Map before they are approved.\nFor a salary certificate, always return separate required fields labelled exactly "Gross Salary (Annual PKR)", "Tax Deducted u/s 149 (Annual PKR)", "Employer Name (as registered with FBR)" and "Tax Year". "Tax Year" is the four-digit tax year the certificate is for (for example 2026 for July 2025 to June 2026); when only the salary period is printed, the tax year is the year in which that period ends; return null when neither is printed. The employer name is the company's full legal name exactly as printed on the certificate letterhead or body (for example "ACME (PRIVATE) LIMITED"); return null when it is not printed. Return the employer NTN, when printed, as a separate optional field labelled "Employer NTN". Use annual amounts explicitly stated on the certificate. If a value is not stated or cannot be read, return null; never infer gross salary from net bank deposits and never assume missing tax withheld is zero. Also preserve other tax-relevant details as separate optional fields when printed, including employee name/ID, salary period, basic pay, allowances, bonuses, benefits/perquisites, exempt or taxable components, and net pay. Do not invent missing details, combine separate components, or annualize monthly amounts unless the certificate explicitly states the annual total.`;
+ 
+ type DocumentSlotRule = {
+   label: string;
+@@ -159,8 +167,14 @@ const DOCUMENT_SLOT_RULES: Record<string, DocumentSlotRule> = {
+       "profit certificate",
+       "profit statement",
+     ],
+-    fieldSignals: ["bank profit", "profit", "profit rate", "tax deducted"],
+-    minimumSignals: 2,
++    fieldSignals: [
++      "gross annual profit",
++      "tax deducted / withheld",
++      "printed section / subsection",
++      "withholding rate",
++      "net profit credited",
++    ],
++    minimumSignals: 3,
+   },
+   pension_statement: {
+     label: "pension statement",
+@@ -631,8 +645,22 @@ export async function updateDocumentExtractionAction(
+         return { success: false, error: requiredErrors.join(" ") };
+     }
+ 
++    let payloadForStorage = normalized.payload;
++    if (
++      document.documentType === "bank_certificate" &&
++      payloadForStorage &&
++      typeof payloadForStorage === "object" &&
++      !Array.isArray(payloadForStorage)
++    ) {
++      // A corrected payload is no longer the previously approved snapshot.
++      // The map action will write a fresh typed projection after re-approval.
++      const payload = { ...(payloadForStorage as Record<string, unknown>) };
++      delete payload.approvedBankProfitCertificate;
++      payloadForStorage = payload;
++    }
++
+     const data = {
+-      extractedData: JSON.stringify(normalized.payload),
++      extractedData: JSON.stringify(payloadForStorage),
+       extractionStatus: "COMPLETED",
+       extractionStartedAt: null,
+       extractionError: null,
+@@ -657,6 +685,18 @@ export async function updateDocumentExtractionAction(
+           document.userId,
+         );
+       });
++    } else if (
++      document.documentType === "bank_certificate" &&
++      document.filingDraftId
++    ) {
++      await prisma.$transaction(async (tx) => {
++        await tx.document.update({ where: { id: documentId }, data });
++        await invalidateFilingForDocumentChange(
++          tx,
++          document.filingDraftId!,
++          document.userId,
++        );
++      });
+     } else {
+       await prisma.document.update({ where: { id: documentId }, data });
+     }
+@@ -995,6 +1035,7 @@ export async function approveAndMapExtractedDocumentAction(documentId: string) {
+       [
+         "cnic",
+         "bank_statement",
++        "bank_certificate",
+         "business_balance_sheet",
+         "business_books",
+       ].includes(document.documentType)
+@@ -1270,6 +1311,113 @@ export async function approveAndMapExtractedDocumentAction(documentId: string) {
+       };
+     }
+ 
++    if (document.documentType === "bank_certificate") {
++      if (!document.filingDraftId) {
++        return { success: false, error: "Document is not attached to a filing" };
++      }
++      try {
++        const certificate = await prisma.$transaction(
++          async (tx) => {
++            const latest = await tx.document.findFirst({
++              where: {
++                filingDraftId: document.filingDraftId,
++                userId: document.userId,
++                documentType: "bank_certificate",
++              },
++              orderBy: [{ createdAt: "desc" }, { id: "desc" }],
++            });
++            if (
++              !latest ||
++              latest.id !== document.id ||
++              latest.extractedData !== document.extractedData
++            ) {
++              throw new Error(
++                "Bank profit certificate changed. Reload and review the latest certificate before approval.",
++              );
++            }
++            if (!["COMPLETED", "MAPPED"].includes(latest.extractionStatus)) {
++              throw new Error(
++                "Extract and review the bank profit certificate before approval.",
++              );
++            }
++            const draft = await tx.filingDraft.findFirst({
++              where: { id: document.filingDraftId!, userId: document.userId },
++              select: { taxYear: true },
++            });
++            if (!draft) throw new Error("Filing draft not found");
++
++            let savedPayload: unknown;
++            try {
++              savedPayload = latest.extractedData
++                ? JSON.parse(latest.extractedData)
++                : null;
++            } catch {
++              throw new Error(
++                "Saved extraction is unreadable. Re-extract or replace this certificate.",
++              );
++            }
++            const reviewedPayload = ensureBankProfitCertificateReviewFields(
++              savedPayload,
++            ) as {
++              fields?: Array<{ label?: unknown; value?: unknown }>;
++              [key: string]: unknown;
++            };
++            const reviewedFields = reviewedPayload?.fields ?? [];
++            const errors = getBankProfitCertificateReviewErrors(
++              reviewedFields,
++              draft.taxYear,
++            );
++            if (errors.length) throw new Error(errors.join(" "));
++
++            const canonical = readApprovedBankProfitCertificate(
++              reviewedFields,
++              draft.taxYear,
++            );
++            if (!canonical) {
++              throw new Error(
++                "The certificate could not be converted to the canonical bank-profit fields. Review every required value.",
++              );
++            }
++
++            const payloadToStore = { ...reviewedPayload };
++            delete payloadToStore.approvedBankProfitCertificate;
++            await tx.document.update({
++              where: { id: latest.id },
++              data: {
++                extractedData: JSON.stringify({
++                  ...payloadToStore,
++                  approvedBankProfitCertificate: canonical,
++                }),
++                extractionStatus: "MAPPED",
++                extractionStartedAt: null,
++                extractionError: null,
++              },
++            });
++            await invalidateFilingForDocumentChange(
++              tx,
++              document.filingDraftId!,
++              document.userId,
++            );
++            return canonical;
++          },
++          { isolationLevel: "Serializable" },
++        );
++        return {
++          success: true,
++          mapping: "BANK_PROFIT_CERTIFICATE",
++          certificate,
++        };
++      } catch (error) {
++        return {
++          success: false,
++          error:
++            error instanceof Error
++              ? error.message
++              : "Review the bank profit certificate before approval.",
++        };
++      }
++    }
++
+     if (document.documentType === "cnic") {
+       // The CNIC is the authoritative source for date of birth, which the
+       // Section 149(IA) pension rules need, and it carries the legal name and the
+diff --git a/components/tax/filing/hooks/use-filing-documents.ts b/components/tax/filing/hooks/use-filing-documents.ts
+index 7cf9d05..a916ba5 100644
+--- a/components/tax/filing/hooks/use-filing-documents.ts
++++ b/components/tax/filing/hooks/use-filing-documents.ts
+@@ -434,9 +434,20 @@ export function useFilingDocuments({
+   ) {
+     const record = documentRecords[documentType];
+     if (!record) return;
+-    if (documentType === "pension_statement" && record.extractionStatus === "MAPPED") {
+-      setDocumentRecords(previous => ({ ...previous, [documentType]: { ...record, extractionStatus: "COMPLETED" } }));
+-      setProfileSyncNote("Unsaved pension changes: Save & Approve Map again before continuing. The previously approved source is not silently overwritten.");
++    if (
++      ["pension_statement", "bank_certificate"].includes(documentType) &&
++      record.extractionStatus === "MAPPED"
++    ) {
++      setDocumentRecords((previous) => ({
++        ...previous,
++        [documentType]: { ...record, extractionStatus: "COMPLETED" },
++      }));
++      setProfileSyncNote(
++        documentType === "bank_certificate"
++          ? "Unsaved bank-profit certificate changes: Save & Approve Map again before continuing. The prior approved projection is not silently overwritten."
++          : "Unsaved pension changes: Save & Approve Map again before continuing. The previously approved source is not silently overwritten.",
++      );
++      resetDownstreamSteps(step, true);
+     }
+     if (
+       documentType === "business_books" &&
+@@ -460,9 +471,12 @@ export function useFilingDocuments({
+       if (!field) return previous;
+ 
+       const label = field.label.toLowerCase().replace(/[^a-z0-9]+/g, "_");
+-      const nextValue = ["cnic_number", "cnic", "identity_number"].includes(
+-        label,
+-      )
++      const nextValue = [
++        "cnic_number",
++        "cnic",
++        "identity_number",
++        "taxpayer_cnic",
++      ].includes(label)
+         ? formatCnicInput(value)
+         : ["name", "full_name", "taxpayer_name"].includes(label)
+           ? normalizeIdentityName(value)
+@@ -487,7 +501,11 @@ export function useFilingDocuments({
+             }
+           : current,
+       );
+-      return { ...previous, [record.id]: { ...payload, fields } };
++      const nextPayload: ExtractedPayload = { ...payload, fields };
++      if (documentType === "bank_certificate") {
++        delete nextPayload.approvedBankProfitCertificate;
++      }
++      return { ...previous, [record.id]: nextPayload };
+     });
+   }
+ 
+@@ -530,7 +548,17 @@ export function useFilingDocuments({
+       ...previous,
+       [documentType]: { ...record, extractionStatus: "COMPLETED" },
+     }));
+-    if (documentType === "pension_statement") resetDownstreamSteps(step, true);
++    if (documentType === "bank_certificate") {
++      setExtractedByDocumentId((previous) => {
++        const payload = previous[record.id];
++        if (!payload) return previous;
++        const nextPayload = { ...payload };
++        delete nextPayload.approvedBankProfitCertificate;
++        return { ...previous, [record.id]: nextPayload };
++      });
++    }
++    if (["pension_statement", "bank_certificate"].includes(documentType))
++      resetDownstreamSteps(step, true);
+   }
+ 
+   async function handleRecoverBusinessPurchaseBasis(documentType: string) {
+@@ -591,8 +619,20 @@ export function useFilingDocuments({
+       return;
+     }
+ 
+-    if (documentType === "pension_statement") {
+-      setDocumentRecords(previous => ({ ...previous, [documentType]: { ...record, extractionStatus: "COMPLETED" } }));
++    if (documentType === "bank_certificate") {
++      setExtractedByDocumentId((previous) => {
++        const payload = previous[record.id];
++        if (!payload) return previous;
++        const nextPayload = { ...payload };
++        delete nextPayload.approvedBankProfitCertificate;
++        return { ...previous, [record.id]: nextPayload };
++      });
++    }
++    if (["pension_statement", "bank_certificate"].includes(documentType)) {
++      setDocumentRecords((previous) => ({
++        ...previous,
++        [documentType]: { ...record, extractionStatus: "COMPLETED" },
++      }));
+       resetDownstreamSteps(step, true);
+     }
+     const result = await approveAndMapExtractedDocumentAction(record.id);
+@@ -605,14 +645,37 @@ export function useFilingDocuments({
+     }
+ 
+     setProfileSyncNote(
+-      result.mapping === "PENSION" ? "Annual pension tax source approved. Recalculate Tax and generate/approve a fresh packet; bank cash receipts and profile DOB were not changed." : describeCnicProfilePlan(
+-        (
+-          result as {
+-            profilePlan?: { filled?: string[]; skipped?: { field: string }[] };
+-          }
+-        ).profilePlan,
+-      ),
++      result.mapping === "BANK_PROFIT_CERTIFICATE"
++        ? "Bank-profit certificate fields are approved and saved as canonical evidence. The printed section, rate and ATL status are not converted into a legal tax treatment; reconcile them before calculation/portal entry."
++        : result.mapping === "PENSION"
++          ? "Annual pension tax source approved. Recalculate Tax and generate/approve a fresh packet; bank cash receipts and profile DOB were not changed."
++          : describeCnicProfilePlan(
++              (
++                result as {
++                  profilePlan?: {
++                    filled?: string[];
++                    skipped?: { field: string }[];
++                  };
++                }
++              ).profilePlan,
++            ),
+     );
++    if (
++      result.mapping === "BANK_PROFIT_CERTIFICATE" &&
++      "certificate" in result
++    ) {
++      setExtractedByDocumentId((previous) => {
++        const payload = previous[record.id];
++        if (!payload) return previous;
++        return {
++          ...previous,
++          [record.id]: {
++            ...payload,
++            approvedBankProfitCertificate: result.certificate,
++          },
++        };
++      });
++    }
+     if (result.mapping === "CNIC" && typeof window !== "undefined") {
+       window.dispatchEvent(new Event("taxrocket-profile-updated"));
+     }
+diff --git a/components/tax/filing/wizard-documents-step.tsx b/components/tax/filing/wizard-documents-step.tsx
+index 95d6e77..7b85797 100644
+--- a/components/tax/filing/wizard-documents-step.tsx
++++ b/components/tax/filing/wizard-documents-step.tsx
+@@ -26,6 +26,7 @@ import {
+   documentReviewFieldRequirement,
+ } from "@/lib/tax/document-review-required";
+ import { getTaxYearDateInputBounds } from "@/lib/tax/tax-year-period";
++import type { ApprovedBankProfitCertificate } from "@/lib/tax/bank-profit-certificate-fields";
+ import {
+   isPensionReviewDecisionField,
+   pensionFieldKey,
+@@ -65,6 +66,7 @@ export type ExtractedPayload = {
+   transactions?: ExtractedTransaction[];
+   notes?: string[];
+   purchaseBasisSourceEvidence?: string;
++  approvedBankProfitCertificate?: ApprovedBankProfitCertificate;
+ };
+ 
+ export type FilingDocumentRecord = {
+@@ -244,11 +246,14 @@ export function WizardDocumentsStep({
+           const isCnicDocument = slot.documentType === "cnic";
+           const isSalaryCertificate =
+             slot.documentType === "salary_certificate";
++          const isBankProfitCertificate =
++            slot.documentType === "bank_certificate";
+           const isPensionStatement = slot.documentType === "pension_statement";
+           const isMappableDocument =
+             isPensionStatement ||
+             isCnicDocument ||
+             slot.documentType === "bank_statement" ||
++            isBankProfitCertificate ||
+             isSalaryCertificate ||
+             slot.documentType === "business_balance_sheet" ||
+             slot.documentType === "business_books";
+@@ -514,6 +519,8 @@ export function WizardDocumentsStep({
+                         {isMapped
+                           ? isPensionStatement
+                             ? "Pension source is approved. Editing requires Save & Approve Map again, then a new tax calculation and packet. Changes are not applied until saved."
++                            : isBankProfitCertificate
++                              ? "Bank-profit certificate is approved. Any correction requires Save & Approve Map again; values or tax treatment are not inferred."
+                             : employersEditableAfterMap
+                             ? "This document is already mapped. The values below are read-only, except the employer names: change them and press Save employer."
+                             : purchaseBasisNeeded
+@@ -573,7 +580,7 @@ export function WizardDocumentsStep({
+                             : "Re-read purchase basis from document"}
+                         </Button>
+                       )}
+-                    {(!isMapped || purchaseBasisNeeded || isPensionStatement) && (
++                    {(!isMapped || purchaseBasisNeeded || isPensionStatement || isBankProfitCertificate) && (
+                       <div className="flex flex-wrap gap-2 sm:justify-end">
+                         {isMappableDocument ? (
+                           <Button
+@@ -630,6 +637,17 @@ export function WizardDocumentsStep({
+                       tax was withheld.
+                     </p>
+                   )}
++                  {isBankProfitCertificate && (
++                    <p className="mb-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs text-amber-900">
++                      Copy the bank&apos;s printed instrument/category, Section /
++                      subsection, applied rate, ATL status, and Sukuk details
++                      exactly; do not infer a tax rule. Enter at least one
++                      taxpayer ID (CNIC or NTN) and one account ID (account
++                      number or IBAN). Gross profit minus tax withheld must
++                      equal net profit credited. A zero withholding amount must
++                      be confirmed from the certificate, not assumed.
++                    </p>
++                  )}
+ 
+                   {hasFields ? (
+                     <div className="grid gap-3 sm:grid-cols-2">
+@@ -661,6 +679,7 @@ export function WizardDocumentsStep({
+                           "cnic_number",
+                           "cnic",
+                           "identity_number",
++                          "taxpayer_cnic",
+                         ].includes(normalizedFieldLabel);
+                         const isNameField = [
+                           "name",
+@@ -850,7 +869,9 @@ export function WizardDocumentsStep({
+                                   )
+                                 }
+                                 readOnly={
+-                                  isMapped && !isPensionStatement &&
++                                  isMapped &&
++                                  !isPensionStatement &&
++                                  !isBankProfitCertificate &&
+                                   !(
+                                     ibanEditableAfterMap &&
+                                     isBankStatementIbanLabel(field.label)
+diff --git a/lib/tax/document-requirements.ts b/lib/tax/document-requirements.ts
+index 5ff484d..e6a678e 100644
+--- a/lib/tax/document-requirements.ts
++++ b/lib/tax/document-requirements.ts
+@@ -48,7 +48,8 @@ const DOC_MAP: Record<
+     {
+       documentType: "bank_certificate",
+       label: "Bank Profit Certificate",
+-      reason: "Required for bank profit income.",
++      reason:
++        "Required for bank-profit income: review the printed period, gross profit, withholding, section/rate/status and net-credit reconciliation before approval.",
+     },
+   ],
+   dividend: [
+diff --git a/lib/tax/document-review-required.ts b/lib/tax/document-review-required.ts
+index 8c45fdb..41d3ff9 100644
+--- a/lib/tax/document-review-required.ts
++++ b/lib/tax/document-review-required.ts
+@@ -11,6 +11,11 @@ import {
+   isBankStatementIbanLabel,
+   validateBankStatementIban,
+ } from "./bank-statement-fields";
++import {
++  BANK_PROFIT_CERTIFICATE_FIELD_DEFINITIONS,
++  getBankProfitCertificateReviewErrors,
++  isBankProfitCertificateFieldRequired,
++} from "./bank-profit-certificate-fields";
+ 
+ type Field = { label?: unknown; value?: unknown; confidence?: unknown };
+ type Requirement = {
+@@ -65,6 +70,11 @@ const REQUIREMENTS: Record<string, Requirement[]> = {
+     },
+     { label: "Currency", kind: "currency" },
+   ],
++  bank_certificate: BANK_PROFIT_CERTIFICATE_FIELD_DEFINITIONS.map((field) => ({
++    label: field.label,
++    aliases: [...field.aliases],
++    ...(field.validationKind ? { kind: field.validationKind } : {}),
++  })),
+   business_books: [
+     { label: "Business Name" },
+     { label: "Tax Year", kind: "year" },
+@@ -140,6 +150,8 @@ export function isDocumentReviewRequiredField(
+   )
+     return true;
+   if (documentType === "pension_statement") return isPensionStatementRequiredField(label);
++  if (documentType === "bank_certificate")
++    return isBankProfitCertificateFieldRequired(label, fields);
+   return documentType === "salary_certificate"
+     ? isSalaryCertificateRequiredField(String(label ?? ""))
+     : Boolean(documentReviewFieldRequirement(documentType, label));
+@@ -171,6 +183,8 @@ export function getDocumentReviewRequiredErrors(
+   taxYear?: number,
+ ): string[] {
+   if (documentType === "pension_statement") return getPensionStatementReviewErrors(fields, taxYear);
++  if (documentType === "bank_certificate")
++    return getBankProfitCertificateReviewErrors(fields, taxYear);
+   const errors: string[] = [];
+   const requirements: Requirement[] = [...(REQUIREMENTS[documentType] ?? [])];
+   if (
+diff --git a/lib/tax/filing-completeness.ts b/lib/tax/filing-completeness.ts
+index e66982e..71208ca 100644
+--- a/lib/tax/filing-completeness.ts
++++ b/lib/tax/filing-completeness.ts
+@@ -29,6 +29,7 @@ const READY_DOCUMENT_STATUSES = new Set(["COMPLETED", "MAPPED"]);
+ const DOCUMENT_TYPES_REQUIRING_MAPPING = new Set([
+   "business_books",
+   "bank_statement",
++  "bank_certificate",
+   "salary_certificate",
+   "pension_statement",
+ ]);
+@@ -176,6 +177,15 @@ export async function validateFilingCompleteness(
+         blockers.push(`Pension Statement: ${error}`);
+       }
+     }
++    if (documentType === "bank_certificate") {
++      for (const error of storedDocumentReviewRequiredErrors(
++        documentType,
++        latestDocument.extractedData,
++        draft.taxYear,
++      )) {
++        blockers.push(`Bank Profit Certificate: ${error}`);
++      }
++    }
+     if (documentType === "business_books") {
+       for (const error of storedDocumentReviewRequiredErrors(
+         documentType,
+diff --git a/package.json b/package.json
+index da4c010..39e3f9b 100644
+--- a/package.json
++++ b/package.json
+@@ -20,7 +20,7 @@
+     "verify:withholding-sources": "node scripts/verify-withholding-sources.cjs",
+     "verify:route-protection": "node scripts/verify-route-protection.cjs",
+     "verify:dependency-health": "node scripts/verify-dependency-health.cjs",
+-    "verify:all": "npm run verify:sales-tax-rules && npm run verify:sales-tax-intake && npm run verify:sales-tax-return && npm run verify:sales-tax-dates && npm run verify:multiple-filings && npm run verify:sales-tax-module && npm run verify:sales-tax-uploads && npm run verify:sales-tax-review && npm run verify:sales-tax-businesses && npm run verify:sales-tax-manual && npm run verify:srb-rules && npm run verify:srb-return && npm run verify:srb-module && npm run verify:ty2026-rates && npm run verify:ty2026-data-model && npm run verify:ty2026-filer-status && npm run verify:ty2026-subcategories && npm run verify:ty2026-tax-calculation && npm run verify:pension-routing && npm run verify:pension-statement && npm run verify:pension-prefill && npm run verify:business-profit && npm run verify:salary-certificate-fields && npm run verify:document-extraction-state && npm run verify:upload-safety && npm run verify:withholding-sources && npm run verify:route-protection && npm run verify:dependency-health && npm run verify:tax-breakdown-surfacing && npm run verify:cleanup-hygiene && npm run verify:flat-income-routes && npm run verify:advance-tax && npm run verify:money-precision && npm run verify:money-database && npm run verify:bank-statement-isolation && npm run verify:portal-field-map && npm run verify:bank-iban && npm run verify:cash-in-hand && npm run verify:bank-classification && npm run verify:employment-captures && npm run verify:property-capture && npm run verify:cnic-profile-plan && npm run verify:iris-row-filler && npm run verify:iris-wealth-driver && npm run verify:iris-employer-driver && npm run verify:iris-navigation",
++    "verify:all": "npm run verify:sales-tax-rules && npm run verify:sales-tax-intake && npm run verify:sales-tax-return && npm run verify:sales-tax-dates && npm run verify:multiple-filings && npm run verify:sales-tax-module && npm run verify:sales-tax-uploads && npm run verify:sales-tax-review && npm run verify:sales-tax-businesses && npm run verify:sales-tax-manual && npm run verify:srb-rules && npm run verify:srb-return && npm run verify:srb-module && npm run verify:ty2026-rates && npm run verify:ty2026-data-model && npm run verify:ty2026-filer-status && npm run verify:ty2026-subcategories && npm run verify:ty2026-tax-calculation && npm run verify:pension-routing && npm run verify:pension-statement && npm run verify:pension-prefill && npm run verify:business-profit && npm run verify:salary-certificate-fields && npm run verify:document-extraction-state && npm run verify:upload-safety && npm run verify:withholding-sources && npm run verify:route-protection && npm run verify:dependency-health && npm run verify:tax-breakdown-surfacing && npm run verify:cleanup-hygiene && npm run verify:flat-income-routes && npm run verify:advance-tax && npm run verify:money-precision && npm run verify:money-database && npm run verify:bank-statement-isolation && npm run verify:portal-field-map && npm run verify:bank-iban && npm run verify:bank-profit-certificate && npm run verify:cash-in-hand && npm run verify:bank-classification && npm run verify:employment-captures && npm run verify:property-capture && npm run verify:cnic-profile-plan && npm run verify:iris-row-filler && npm run verify:iris-wealth-driver && npm run verify:iris-employer-driver && npm run verify:iris-navigation",
+     "verify:money-precision": "node scripts/verify-money-precision.cjs",
+     "verify:money-database": "node scripts/verify-money-database.cjs",
+     "verify:tax-breakdown-surfacing": "node scripts/verify-tax-breakdown-surfacing.cjs",
+@@ -57,6 +57,7 @@
+     "verify:iris-row-filler": "node --test scripts/verify-iris-row-filler.cjs",
+     "verify:portal-field-map": "node scripts/verify-portal-field-map.cjs",
+     "verify:bank-iban": "node --test scripts/verify-bank-iban.cjs",
++    "verify:bank-profit-certificate": "node --test scripts/verify-bank-profit-certificate.cjs",
+     "verify:cash-in-hand": "node --test scripts/verify-cash-in-hand.cjs",
+     "verify:bank-classification": "node --test scripts/verify-bank-classification.cjs",
+     "verify:employment-captures": "node scripts/verify-employment-captures.cjs",
+diff --git a/scripts/verify-bank-iban.cjs b/scripts/verify-bank-iban.cjs
+index f156b97..a064601 100644
+--- a/scripts/verify-bank-iban.cjs
++++ b/scripts/verify-bank-iban.cjs
+@@ -79,7 +79,31 @@ const { validateFilingCompleteness } = require(
+   path.join(root, "lib/tax/filing-completeness.ts"),
+ );
+ 
+-function fakeDb({ accounts, transactions = [] }) {
++const bankProfitCertificateFields = [
++  { label: "Tax Year", value: 2026 },
++  { label: "Reporting Period Start", value: "2025-07-01" },
++  { label: "Reporting Period End", value: "2026-06-30" },
++  { label: "Bank / Financial Institution Name", value: "SCB" },
++  { label: "Bank NTN", value: "1234567" },
++  { label: "Taxpayer Name", value: "Example Taxpayer" },
++  { label: "Taxpayer CNIC", value: "4210112345678" },
++  { label: "Account Number", value: "123456789" },
++  { label: "Instrument / Category", value: "Term Deposit" },
++  { label: "Printed Section / Subsection", value: "Section 151(1)(b)" },
++  { label: "Gross Annual Profit / Yield", value: 100 },
++  { label: "Tax Deducted / Withheld", value: 15 },
++  { label: "Bank-applied Withholding Rate (%)", value: "15%" },
++  { label: "ATL / Non-ATL Status", value: "ATL" },
++  { label: "Net Profit Credited", value: 85 },
++  { label: "Currency", value: "PKR" },
++];
++
++function fakeDb({
++  accounts,
++  transactions = [],
++  bankCertificateStatus = "MAPPED",
++  bankCertificateFields = bankProfitCertificateFields,
++}) {
+   const doc = (a) => ({
+     id: `doc-${a.id}`,
+     documentType: "bank_statement",
+@@ -107,7 +131,7 @@ function fakeDb({ accounts, transactions = [] }) {
+     document: {
+       findMany: async () => [
+         ...accounts.map(doc),
+-        // Unrelated required slots, present so only the bank rules are under test.
++        // Other required slots, present so only the account-specific bank rules are under test.
+         {
+           id: "doc-cnic",
+           documentType: "cnic",
+@@ -118,7 +142,8 @@ function fakeDb({ accounts, transactions = [] }) {
+           id: "doc-cert",
+           documentType: "bank_certificate",
+           bankAccountId: null,
+-          extractionStatus: "MAPPED",
++          extractionStatus: bankCertificateStatus,
++          extractedData: JSON.stringify({ fields: bankCertificateFields }),
+         },
+       ],
+     },
+@@ -191,6 +216,29 @@ test("gate: IBAN present, statement and transactions present -> no IBAN/transact
+   assert.deepEqual(blockers, []);
+ });
+ 
++test("gate: bank profit certificate must be mapped and its gross/net values reconciled", async () => {
++  const unmapped = await blockersFor(
++    fakeDb({ accounts: [], bankCertificateStatus: "COMPLETED" }),
++  );
++  assert.ok(
++    unmapped.some((blocker) => blocker.includes("Review and approve/map the required bank_certificate document")),
++    JSON.stringify(unmapped),
++  );
++
++  const unreconciled = await blockersFor(
++    fakeDb({
++      accounts: [],
++      bankCertificateFields: bankProfitCertificateFields.map((field) =>
++        field.label === "Net Profit Credited" ? { ...field, value: 84 } : field,
++      ),
++    }),
++  );
++  assert.ok(
++    unreconciled.some((blocker) => blocker.includes("must equal Net Profit Credited")),
++    JSON.stringify(unreconciled),
++  );
++});
++
+ // --- packet ------------------------------------------------------------------
+ const bank = (iban, closingBalance, bankName = "SCB") => ({
+   iban,
+@@ -347,7 +395,7 @@ test("wiring: the upload card shows the IBAN as a required field and blocks Map
+   );
+   assert.match(
+     card,
+-    /isDocumentReviewRequiredField\(slot\.documentType, field\.label, extracted\?\.fields\)/,
++    /isDocumentReviewRequiredField\(\s*slot\.documentType,\s*field\.label,\s*extracted\?\.fields,?\s*\)/,
+   );
+   assert.match(card, /required=\{isDocumentReviewRequiredField/);
+   const requirements = read("lib/tax/document-review-required.ts");
+diff --git a/scripts/verify-document-review-required.cjs b/scripts/verify-document-review-required.cjs
+index de494cb..889e1a3 100644
+--- a/scripts/verify-document-review-required.cjs
++++ b/scripts/verify-document-review-required.cjs
+@@ -18,7 +18,7 @@ test('duplicate yearly sales aliases refuse instead of choosing the first amount
+ for(const delta of [{'Tax Year':2025},{Currency:'USD'},{'Sales for the year':0},{'Reporting Period Start':'2025-08-01'},{'Reporting Period End':'2026-05-31'}])test('Books invalid source context refuses '+JSON.stringify(delta),()=>assert.ok(req.getDocumentReviewRequiredErrors('business_books',fields({...books,...delta}),2026).length));
+ test('malformed stored extraction refuses; no required policy is invented for unrelated document slots',()=>{assert.ok(req.storedDocumentReviewRequiredErrors('business_books','invalid JSON',2026).length);assert.deepEqual(req.getDocumentReviewRequiredErrors('invoice_summary',[],2026),[]);});
+ test('salary markers still use the existing salary required-field contract',()=>{assert.equal(req.isDocumentReviewRequiredField('salary_certificate','Gross Salary (Annual PKR)'),true);assert.equal(req.isDocumentReviewRequiredField('salary_certificate','Employer NTN'),false);});
+-test('UI/server/Continue/packet boundaries are wired; redundant always-visible IBAN paragraph removed',()=>{const ui=fs.readFileSync(path.join(root,'components/tax/filing/wizard-documents-step.tsx'),'utf8'),action=fs.readFileSync(path.join(root,'app/actions/extraction.ts'),'utf8'),wizard=fs.readFileSync(path.join(root,'components/tax/filing/filing-wizard.tsx'),'utf8'),gate=fs.readFileSync(path.join(root,'lib/tax/filing-completeness.ts'),'utf8');assert.ok(!ui.includes('The account IBAN (24 characters, starts with PK)'));assert.match(ui,/required=\{isDocumentReviewRequiredField/);assert.match(ui,/reviewRequiredErrors\.length > 0/);assert.match(action,/requiredErrors\.length\) return \{ success: false/);assert.match(wizard,/document\.reviewRequiredErrors\.length > 0/);assert.match(gate,/storedDocumentReviewRequiredErrors\(documentType, latestDocument\.extractedData, draft\.taxYear\)/);});
++test('UI/server/Continue/packet boundaries are wired; redundant always-visible IBAN paragraph removed',()=>{const ui=fs.readFileSync(path.join(root,'components/tax/filing/wizard-documents-step.tsx'),'utf8'),action=fs.readFileSync(path.join(root,'app/actions/extraction.ts'),'utf8'),wizard=fs.readFileSync(path.join(root,'components/tax/filing/filing-wizard.tsx'),'utf8'),gate=fs.readFileSync(path.join(root,'lib/tax/filing-completeness.ts'),'utf8');assert.ok(!ui.includes('The account IBAN (24 characters, starts with PK)'));assert.match(ui,/required=\{isDocumentReviewRequiredField/);assert.match(ui,/reviewRequiredErrors\.length > 0/);assert.match(action,/if\s*\(requiredErrors\.length\)\s*return\s*\{\s*success: false/);assert.match(wizard,/document\.reviewRequiredErrors\.length > 0/);assert.match(gate,/storedDocumentReviewRequiredErrors\(documentType, latestDocument\.extractedData, draft\.taxYear\)/);});
+ require.extensions['.tsx']=(m,f)=>m._compile(ts.transpileModule(fs.readFileSync(f,'utf8'),{compilerOptions:{module:ts.ModuleKind.CommonJS,target:ts.ScriptTarget.ES2020,jsx:ts.JsxEmit.ReactJSX,esModuleInterop:true,resolveJsonModule:true}}).outputText,f);
+ test('rendered review has Required attributes for missing fields, optional scalars stay optional, and Map is blocked',()=>{
+  const React=require('react'),{renderToStaticMarkup}=require('react-dom/server'),{JSDOM}=require('jsdom');
+diff --git a/lib/tax/bank-profit-certificate-fields.ts b/lib/tax/bank-profit-certificate-fields.ts
+new file mode 100644
+index 0000000..29f47ba
+--- /dev/null
++++ b/lib/tax/bank-profit-certificate-fields.ts
+@@ -0,0 +1,429 @@
++import { validatePakistaniIban, normalizeIban } from "./iban";
++import { parseTaxpayerDateOfBirth } from "./taxpayer-age";
++import { getTaxYearStatementRange } from "./tax-year-period";
++
++export const BANK_PROFIT_CERTIFICATE_LABELS = {
++  taxYear: "Tax Year",
++  reportingPeriodStart: "Reporting Period Start",
++  reportingPeriodEnd: "Reporting Period End",
++  bankName: "Bank / Financial Institution Name",
++  bankNtn: "Bank NTN",
++  taxpayerName: "Taxpayer Name",
++  taxpayerCnic: "Taxpayer CNIC",
++  taxpayerNtn: "Taxpayer NTN",
++  accountNumber: "Account Number",
++  iban: "IBAN",
++  instrumentCategory: "Instrument / Category",
++  printedSectionSubsection: "Printed Section / Subsection",
++  grossAnnualProfit: "Gross Annual Profit / Yield",
++  taxDeducted: "Tax Deducted / Withheld",
++  withholdingRate: "Bank-applied Withholding Rate (%)",
++  atlStatus: "ATL / Non-ATL Status",
++  netProfitCredited: "Net Profit Credited",
++  currency: "Currency",
++  sukukHolderType: "Sukuk Holder Type (Company / Individual / AOP)",
++  sukukReturnBand: "Sukuk Return Band (Above / Below PKR 1M)",
++} as const;
++
++export type BankProfitCertificateFieldKind =
++  keyof typeof BANK_PROFIT_CERTIFICATE_LABELS;
++export type BankProfitCertificateReviewKind =
++  | "amount"
++  | "positive_amount"
++  | "date"
++  | "year"
++  | "cnic"
++  | "currency";
++
++export type BankProfitCertificateFieldDefinition = {
++  kind: BankProfitCertificateFieldKind;
++  label: string;
++  aliases: readonly string[];
++  required: boolean | "if_sukuk";
++  validationKind?: BankProfitCertificateReviewKind;
++  alternativeGroup?: "taxpayer_identity" | "account_identity";
++};
++
++/**
++ * The review form's canonical bank-profit certificate schema. Extraction
++ * labels are mapped to these keys only; the printed legal section, rate and
++ * taxpayer-list status remain evidence, not a guessed tax treatment.
++ */
++export const BANK_PROFIT_CERTIFICATE_FIELD_DEFINITIONS: readonly BankProfitCertificateFieldDefinition[] = [
++  { kind: "taxYear", label: BANK_PROFIT_CERTIFICATE_LABELS.taxYear, aliases: ["assessment year", "taxation year"], required: true, validationKind: "year" },
++  { kind: "reportingPeriodStart", label: BANK_PROFIT_CERTIFICATE_LABELS.reportingPeriodStart, aliases: ["reporting period from", "period start", "profit period start", "from date"], required: true, validationKind: "date" },
++  { kind: "reportingPeriodEnd", label: BANK_PROFIT_CERTIFICATE_LABELS.reportingPeriodEnd, aliases: ["reporting period to", "period end", "profit period end", "to date"], required: true, validationKind: "date" },
++  { kind: "bankName", label: BANK_PROFIT_CERTIFICATE_LABELS.bankName, aliases: ["bank name", "financial institution name", "institution name", "bank financial institution name"], required: true },
++  { kind: "bankNtn", label: BANK_PROFIT_CERTIFICATE_LABELS.bankNtn, aliases: ["bank ntn number", "financial institution ntn", "institution ntn", "bank tax registration number"], required: true },
++  { kind: "taxpayerName", label: BANK_PROFIT_CERTIFICATE_LABELS.taxpayerName, aliases: ["customer name", "account holder name", "name of taxpayer"], required: true },
++  { kind: "taxpayerCnic", label: BANK_PROFIT_CERTIFICATE_LABELS.taxpayerCnic, aliases: ["taxpayer cnic number", "customer cnic", "cnic number", "identity number"], required: false, validationKind: "cnic", alternativeGroup: "taxpayer_identity" },
++  { kind: "taxpayerNtn", label: BANK_PROFIT_CERTIFICATE_LABELS.taxpayerNtn, aliases: ["taxpayer ntn number", "customer ntn", "taxpayer tax number"], required: false, alternativeGroup: "taxpayer_identity" },
++  { kind: "accountNumber", label: BANK_PROFIT_CERTIFICATE_LABELS.accountNumber, aliases: ["account no", "bank account number", "account number/iban"], required: false, alternativeGroup: "account_identity" },
++  { kind: "iban", label: BANK_PROFIT_CERTIFICATE_LABELS.iban, aliases: ["account iban", "iban number"], required: false, alternativeGroup: "account_identity" },
++  { kind: "instrumentCategory", label: BANK_PROFIT_CERTIFICATE_LABELS.instrumentCategory, aliases: ["instrument", "product category", "investment product", "profit category"], required: true },
++  { kind: "printedSectionSubsection", label: BANK_PROFIT_CERTIFICATE_LABELS.printedSectionSubsection, aliases: ["section/subsection", "tax section", "withholding section", "printed tax section"], required: true },
++  { kind: "grossAnnualProfit", label: BANK_PROFIT_CERTIFICATE_LABELS.grossAnnualProfit, aliases: ["gross annual profit", "annual gross profit", "annual profit", "annual yield", "gross profit annual pkr"], required: true, validationKind: "positive_amount" },
++  { kind: "taxDeducted", label: BANK_PROFIT_CERTIFICATE_LABELS.taxDeducted, aliases: ["tax deducted", "tax withheld", "withholding tax deducted", "tax deducted/withheld"], required: true, validationKind: "amount" },
++  { kind: "withholdingRate", label: BANK_PROFIT_CERTIFICATE_LABELS.withholdingRate, aliases: ["bank applied withholding rate", "withholding rate", "withholding tax rate", "wht rate", "tax rate applied"], required: true, validationKind: "amount" },
++  { kind: "atlStatus", label: BANK_PROFIT_CERTIFICATE_LABELS.atlStatus, aliases: ["atl status", "non-atl status", "taxpayer status", "atl/non-atl"], required: true },
++  { kind: "netProfitCredited", label: BANK_PROFIT_CERTIFICATE_LABELS.netProfitCredited, aliases: ["net profit credited", "net yield credited", "profit credited", "net amount credited"], required: true, validationKind: "amount" },
++  { kind: "currency", label: BANK_PROFIT_CERTIFICATE_LABELS.currency, aliases: ["profit currency", "certificate currency"], required: true, validationKind: "currency" },
++  { kind: "sukukHolderType", label: BANK_PROFIT_CERTIFICATE_LABELS.sukukHolderType, aliases: ["sukuk holder type", "holder type", "holder classification"], required: "if_sukuk" },
++  { kind: "sukukReturnBand", label: BANK_PROFIT_CERTIFICATE_LABELS.sukukReturnBand, aliases: ["sukuk return band", "return band", "profit band"], required: "if_sukuk" },
++];
++
++export type BankProfitCertificateFieldLike = {
++  label?: unknown;
++  value?: unknown;
++  confidence?: unknown;
++  [key: string]: unknown;
++};
++
++function normalizedLabel(value: unknown) {
++  return String(value ?? "")
++    .toLowerCase()
++    .replace(/[^a-z0-9]+/g, "_")
++    .replace(/^_+|_+$/g, "");
++}
++
++export function getBankProfitCertificateFieldKind(
++  label: unknown,
++): BankProfitCertificateFieldKind | null {
++  const normalized = normalizedLabel(label);
++  if (!normalized) return null;
++  const definition = BANK_PROFIT_CERTIFICATE_FIELD_DEFINITIONS.find((field) =>
++    [field.label, ...field.aliases].some(
++      (candidate) => normalizedLabel(candidate) === normalized,
++    ),
++  );
++  return definition?.kind ?? null;
++}
++
++export function bankProfitCertificateFieldValue(
++  fields: BankProfitCertificateFieldLike[] | undefined,
++  kind: BankProfitCertificateFieldKind,
++): unknown {
++  return fields?.find(
++    (field) => getBankProfitCertificateFieldKind(field.label) === kind,
++  )?.value;
++}
++
++function isMissing(value: unknown) {
++  return (
++    value === null ||
++    value === undefined ||
++    (typeof value === "string" && value.trim() === "")
++  );
++}
++
++export function parseBankProfitCertificateAmount(value: unknown): number | null {
++  if (typeof value === "boolean" || value === null || value === undefined) {
++    return null;
++  }
++  const text = String(value)
++    .trim()
++    .replace(/^\s*(?:PKR|Rs\.?|₨)\s*/i, "")
++    .replace(/[\s,]/g, "");
++  if (!/^\d+(?:\.\d{1,2})?$/.test(text)) return null;
++  const amount = Number(text);
++  return Number.isFinite(amount) ? Math.round(amount * 100) / 100 : null;
++}
++
++export function parseBankProfitCertificateRate(value: unknown): number | null {
++  if (typeof value === "boolean" || value === null || value === undefined) {
++    return null;
++  }
++  const text = String(value)
++    .trim()
++    .replace(/\s*(?:%|percent|pct)\s*$/i, "")
++    .replace(/,/g, "");
++  if (!/^\d+(?:\.\d{1,4})?$/.test(text)) return null;
++  const rate = Number(text);
++  return Number.isFinite(rate) ? rate : null;
++}
++
++function parseIsoDate(value: unknown): string | null {
++  const parsed = parseTaxpayerDateOfBirth(value);
++  return parsed ? parsed.toISOString().slice(0, 10) : null;
++}
++
++function fieldValuesByKind(
++  fields: BankProfitCertificateFieldLike[] | undefined,
++) {
++  return new Map<BankProfitCertificateFieldKind, BankProfitCertificateFieldLike[]>(
++    BANK_PROFIT_CERTIFICATE_FIELD_DEFINITIONS.map((definition) => [
++      definition.kind,
++      (fields ?? []).filter(
++        (field) => getBankProfitCertificateFieldKind(field.label) === definition.kind,
++      ),
++    ]),
++  );
++}
++
++function isSukukInstrument(fields: BankProfitCertificateFieldLike[] | undefined) {
++  const category = String(
++    bankProfitCertificateFieldValue(fields, "instrumentCategory") ?? "",
++  )
++    .trim()
++    .toLowerCase();
++  return category.includes("sukuk");
++}
++
++export function isBankProfitCertificateFieldRequired(
++  label: unknown,
++  fields?: BankProfitCertificateFieldLike[],
++): boolean {
++  const kind = getBankProfitCertificateFieldKind(label);
++  const definition = BANK_PROFIT_CERTIFICATE_FIELD_DEFINITIONS.find(
++    (field) => field.kind === kind,
++  );
++  if (!definition) return false;
++  if (definition.required === true) return true;
++  return definition.required === "if_sukuk" && isSukukInstrument(fields);
++}
++
++function formatAmount(amount: number) {
++  return amount.toLocaleString("en-US", {
++    minimumFractionDigits: 2,
++    maximumFractionDigits: 2,
++  });
++}
++
++/** Full review gate used by the editor, approval action, and filing completeness. */
++export function getBankProfitCertificateReviewErrors(
++  fields: BankProfitCertificateFieldLike[] | undefined,
++  expectedTaxYear?: number,
++): string[] {
++  const errors: string[] = [];
++  const valuesByKind = fieldValuesByKind(fields);
++
++  for (const definition of BANK_PROFIT_CERTIFICATE_FIELD_DEFINITIONS) {
++    const matches = valuesByKind.get(definition.kind) ?? [];
++    if (matches.length > 1) {
++      errors.push(`${definition.label}: duplicate fields; review the extraction.`);
++      continue;
++    }
++    if (isBankProfitCertificateFieldRequired(definition.label, fields) && isMissing(matches[0]?.value)) {
++      errors.push(
++        `${definition.label} is required. Enter it manually from the certificate if it was not extracted; do not infer it.`,
++      );
++    }
++  }
++
++  const taxpayerIdProvided = ["taxpayerCnic", "taxpayerNtn"].some(
++    (kind) => !isMissing(bankProfitCertificateFieldValue(fields, kind as BankProfitCertificateFieldKind)),
++  );
++  if (!taxpayerIdProvided) {
++    errors.push("Enter at least one taxpayer identifier: CNIC or NTN.");
++  }
++  const accountIdProvided = ["accountNumber", "iban"].some(
++    (kind) => !isMissing(bankProfitCertificateFieldValue(fields, kind as BankProfitCertificateFieldKind)),
++  );
++  if (!accountIdProvided) {
++    errors.push("Enter at least one bank account identifier: account number or IBAN.");
++  }
++
++  const value = (kind: BankProfitCertificateFieldKind) =>
++    bankProfitCertificateFieldValue(fields, kind);
++  const taxYearValue = value("taxYear");
++  if (!isMissing(taxYearValue)) {
++    const yearText = String(taxYearValue).trim();
++    if (!/^\d{4}$/.test(yearText) || (expectedTaxYear !== undefined && Number(yearText) !== expectedTaxYear)) {
++      errors.push(`Tax Year must be ${expectedTaxYear ?? "a four-digit year"}.`);
++    }
++  }
++
++  const start = parseIsoDate(value("reportingPeriodStart"));
++  const end = parseIsoDate(value("reportingPeriodEnd"));
++  if (!isMissing(value("reportingPeriodStart")) && !start) {
++    errors.push("Reporting Period Start: enter a valid date in YYYY-MM-DD format.");
++  }
++  if (!isMissing(value("reportingPeriodEnd")) && !end) {
++    errors.push("Reporting Period End: enter a valid date in YYYY-MM-DD format.");
++  }
++  if (start && end) {
++    if (start > end) {
++      errors.push("Reporting Period Start cannot be after Reporting Period End.");
++    } else if (expectedTaxYear !== undefined) {
++      const range = getTaxYearStatementRange(expectedTaxYear);
++      const rangeStart = range.start.toISOString().slice(0, 10);
++      const rangeEnd = range.end.toISOString().slice(0, 10);
++      if (start < rangeStart || end > rangeEnd) {
++        errors.push(
++          `Reporting period must fall within Tax Year ${expectedTaxYear}: ${rangeStart} to ${rangeEnd}.`,
++        );
++      }
++    }
++  }
++
++  const cnic = value("taxpayerCnic");
++  if (!isMissing(cnic) && String(cnic).replace(/\D/g, "").length !== 13) {
++    errors.push("Taxpayer CNIC must contain exactly 13 digits.");
++  }
++  const iban = value("iban");
++  if (!isMissing(iban) && String(iban).trim().toUpperCase().startsWith("PK")) {
++    const validation = validatePakistaniIban(String(iban));
++    if (!validation.valid) errors.push(`IBAN: ${validation.error}`);
++  }
++
++  const gross = parseBankProfitCertificateAmount(value("grossAnnualProfit"));
++  const tax = parseBankProfitCertificateAmount(value("taxDeducted"));
++  const rate = parseBankProfitCertificateRate(value("withholdingRate"));
++  const net = parseBankProfitCertificateAmount(value("netProfitCredited"));
++  if (!isMissing(value("grossAnnualProfit")) && (gross === null || gross <= 0)) {
++    errors.push("Gross Annual Profit / Yield: enter a valid positive amount.");
++  }
++  if (!isMissing(value("taxDeducted")) && (tax === null || tax < 0)) {
++    errors.push("Tax Deducted / Withheld: enter a valid amount of zero or more.");
++  }
++  if (!isMissing(value("withholdingRate")) && (rate === null || rate < 0 || rate > 100)) {
++    errors.push("Bank-applied Withholding Rate (%): enter the printed rate from 0 to 100, without converting it to a tax rule.");
++  }
++  if (!isMissing(value("netProfitCredited")) && (net === null || net < 0)) {
++    errors.push("Net Profit Credited: enter a valid amount of zero or more.");
++  }
++
++  const currency = value("currency");
++  if (!isMissing(currency) && !/^[A-Za-z]{3}$/.test(String(currency).trim())) {
++    errors.push("Currency must be a three-letter currency code, such as PKR.");
++  }
++
++  if (gross !== null && tax !== null && net !== null) {
++    const grossCents = Math.round(gross * 100);
++    const taxCents = Math.round(tax * 100);
++    const netCents = Math.round(net * 100);
++    if (taxCents > grossCents || grossCents - taxCents !== netCents) {
++      errors.push(
++        `Gross Annual Profit / Yield minus Tax Deducted / Withheld must equal Net Profit Credited (current values: ${formatAmount(gross)} - ${formatAmount(tax)} = ${formatAmount(gross - tax)} in the certificate currency).`,
++      );
++    }
++  }
++
++  return [...new Set(errors)];
++}
++
++export type ApprovedBankProfitCertificate = {
++  schemaVersion: 1;
++  taxYear: number;
++  reportingPeriodStart: string;
++  reportingPeriodEnd: string;
++  bankName: string;
++  bankNtn: string;
++  taxpayerName: string;
++  taxpayerCnic: string | null;
++  taxpayerNtn: string | null;
++  accountNumber: string | null;
++  iban: string | null;
++  instrumentCategory: string;
++  printedSectionSubsection: string;
++  grossAnnualProfit: number;
++  taxDeducted: number;
++  bankAppliedWithholdingRatePercent: number;
++  atlStatus: string;
++  netProfitCredited: number;
++  currency: string;
++  sukukHolderType: string | null;
++  sukukReturnBand: string | null;
++};
++
++/** Builds the typed canonical payload after getBankProfitCertificateReviewErrors passes. */
++export function readApprovedBankProfitCertificate(
++  fields: BankProfitCertificateFieldLike[] | undefined,
++  expectedTaxYear?: number,
++): ApprovedBankProfitCertificate | null {
++  if (getBankProfitCertificateReviewErrors(fields, expectedTaxYear).length > 0) {
++    return null;
++  }
++  const text = (kind: BankProfitCertificateFieldKind) => {
++    const raw = bankProfitCertificateFieldValue(fields, kind);
++    return isMissing(raw) ? null : String(raw).trim();
++  };
++  const taxYear = Number(text("taxYear"));
++  const reportingPeriodStart = parseIsoDate(text("reportingPeriodStart"));
++  const reportingPeriodEnd = parseIsoDate(text("reportingPeriodEnd"));
++  const grossAnnualProfit = parseBankProfitCertificateAmount(text("grossAnnualProfit"));
++  const taxDeducted = parseBankProfitCertificateAmount(text("taxDeducted"));
++  const bankAppliedWithholdingRatePercent = parseBankProfitCertificateRate(text("withholdingRate"));
++  const netProfitCredited = parseBankProfitCertificateAmount(text("netProfitCredited"));
++  const bankName = text("bankName");
++  const bankNtn = text("bankNtn");
++  const taxpayerName = text("taxpayerName");
++  const instrumentCategory = text("instrumentCategory");
++  const printedSectionSubsection = text("printedSectionSubsection");
++  const atlStatus = text("atlStatus");
++  const currency = text("currency");
++
++  if (
++    !Number.isInteger(taxYear) ||
++    !reportingPeriodStart ||
++    !reportingPeriodEnd ||
++    !bankName ||
++    !bankNtn ||
++    !taxpayerName ||
++    !instrumentCategory ||
++    !printedSectionSubsection ||
++    grossAnnualProfit === null ||
++    taxDeducted === null ||
++    bankAppliedWithholdingRatePercent === null ||
++    !atlStatus ||
++    netProfitCredited === null ||
++    !currency
++  ) {
++    return null;
++  }
++
++  const rawIban = text("iban");
++  return {
++    schemaVersion: 1,
++    taxYear,
++    reportingPeriodStart,
++    reportingPeriodEnd,
++    bankName,
++    bankNtn,
++    taxpayerName,
++    taxpayerCnic: text("taxpayerCnic"),
++    taxpayerNtn: text("taxpayerNtn"),
++    accountNumber: text("accountNumber"),
++    iban: rawIban
++      ? rawIban.toUpperCase().startsWith("PK")
++        ? normalizeIban(rawIban)
++        : rawIban
++      : null,
++    instrumentCategory,
++    printedSectionSubsection,
++    grossAnnualProfit,
++    taxDeducted,
++    bankAppliedWithholdingRatePercent,
++    atlStatus,
++    netProfitCredited,
++    currency: currency.toUpperCase(),
++    sukukHolderType: text("sukukHolderType"),
++    sukukReturnBand: text("sukukReturnBand"),
++  };
++}
++
++/** Adds editable blanks for every canonical field the extractor did not return. */
++export function ensureBankProfitCertificateReviewFields(extracted: unknown): unknown {
++  if (!extracted || typeof extracted !== "object" || Array.isArray(extracted)) {
++    return extracted;
++  }
++  const payload = extracted as Record<string, unknown>;
++  const fields: BankProfitCertificateFieldLike[] = Array.isArray(payload.fields)
++    ? payload.fields.filter(
++        (field): field is BankProfitCertificateFieldLike =>
++          Boolean(field) && typeof field === "object" && !Array.isArray(field),
++      )
++    : [];
++
++  for (const definition of BANK_PROFIT_CERTIFICATE_FIELD_DEFINITIONS) {
++    if (
++      !fields.some(
++        (field) => getBankProfitCertificateFieldKind(field.label) === definition.kind,
++      )
++    ) {
++      fields.push({ label: definition.label, value: null, confidence: 0 });
++    }
++  }
++
++  return { ...payload, fields };
++}
+diff --git a/lib/tax/document-invalidation.ts b/lib/tax/document-invalidation.ts
+new file mode 100644
+index 0000000..535f38d
+--- /dev/null
++++ b/lib/tax/document-invalidation.ts
+@@ -0,0 +1,65 @@
++import type { Prisma } from "@prisma/client";
++
++/**
++ * A newly saved/approved tax source makes prior calculations, packets and
++ * in-flight portal work stale. Call inside the same database transaction as
++ * the document write so an older approval cannot remain active by accident.
++ */
++export async function invalidateFilingForDocumentChange(
++  tx: Pick<
++    Prisma.TransactionClient,
++    "filingDraft" | "filingPacket" | "fbrConnection" | "localAgentJob"
++  >,
++  filingDraftId: string,
++  userId: string,
++) {
++  await tx.filingDraft.update({
++    where: { id: filingDraftId },
++    data: {
++      status: "IN_PROGRESS",
++      taxCalculationStatus: "NOT_CALCULATED",
++      taxableIncome: null,
++      taxPayable: null,
++      refundDue: null,
++      taxCalculationRevision: null,
++      packetApprovalConfirmed: false,
++      packetApprovalAt: null,
++      packetApprovalByUserId: null,
++    },
++  });
++  await tx.filingPacket.updateMany({
++    where: { filingDraftId, userId, status: { not: "SUPERSEDED" } },
++    data: { status: "SUPERSEDED", approvalStatus: "SUPERSEDED" },
++  });
++  await tx.fbrConnection.updateMany({
++    where: { filingDraftId, userId },
++    data: {
++      status: "NOT_STARTED",
++      agentId: null,
++      message: null,
++      errorMessage: null,
++      startedAt: null,
++      completedAt: null,
++      lastHeartbeat: null,
++    },
++  });
++
++  // Superseding a packet alone does not stop a worker that has already fetched
++  // it; the agent checks job status before each portal step.
++  await tx.localAgentJob.updateMany({
++    where: {
++      filingDraftId,
++      userId,
++      status: {
++        in: [
++          "created",
++          "offered_to_device",
++          "accepted_by_device",
++          "running",
++          "awaiting_user_action",
++        ],
++      },
++    },
++    data: { status: "cancelled", completedAt: new Date() },
++  });
++}
+diff --git a/scripts/verify-bank-profit-certificate.cjs b/scripts/verify-bank-profit-certificate.cjs
+new file mode 100644
+index 0000000..2347e9e
+--- /dev/null
++++ b/scripts/verify-bank-profit-certificate.cjs
+@@ -0,0 +1,185 @@
++#!/usr/bin/env node
++"use strict";
++
++const assert = require("node:assert/strict");
++const fs = require("node:fs");
++const Module = require("node:module");
++const path = require("node:path");
++const test = require("node:test");
++const ts = require("typescript");
++
++const root = path.join(__dirname, "..");
++const originalResolve = Module._resolveFilename;
++Module._resolveFilename = function (request, ...rest) {
++  if (request.startsWith("@/")) request = path.join(root, request.slice(2));
++  return originalResolve.call(this, request, ...rest);
++};
++require.extensions[".ts"] = function (module, filename) {
++  const output = ts.transpileModule(fs.readFileSync(filename, "utf8"), {
++    compilerOptions: {
++      module: ts.ModuleKind.CommonJS,
++      target: ts.ScriptTarget.ES2020,
++    },
++  }).outputText;
++  module._compile(output, filename);
++};
++
++const fields = require(path.join(root, "lib/tax/bank-profit-certificate-fields.ts"));
++const review = require(path.join(root, "lib/tax/document-review-required.ts"));
++
++const L = fields.BANK_PROFIT_CERTIFICATE_LABELS;
++const fixtureValues = {
++  [L.taxYear]: 2026,
++  [L.reportingPeriodStart]: "2025-07-01",
++  [L.reportingPeriodEnd]: "2026-06-30",
++  [L.bankName]: "Example Bank Limited",
++  [L.bankNtn]: "1234567",
++  [L.taxpayerName]: "Ayesha Example",
++  [L.taxpayerCnic]: "42101-1234567-8",
++  [L.taxpayerNtn]: null,
++  [L.accountNumber]: "00123456789",
++  [L.iban]: null,
++  [L.instrumentCategory]: "Term Deposit",
++  [L.printedSectionSubsection]: "Section 151(1)(b)",
++  [L.grossAnnualProfit]: "1,000,000.00",
++  [L.taxDeducted]: "150,000.00",
++  [L.withholdingRate]: "15%",
++  [L.atlStatus]: "ATL",
++  [L.netProfitCredited]: "850,000.00",
++  [L.currency]: "PKR",
++  [L.sukukHolderType]: null,
++  [L.sukukReturnBand]: null,
++};
++const makeFields = (values = fixtureValues) =>
++  Object.entries(values).map(([label, value]) => ({ label, value }));
++
++
++test("canonical bank-profit review fields are visible; missing values stay null", () => {
++  const payload = fields.ensureBankProfitCertificateReviewFields({ fields: [] });
++  assert.equal(
++    payload.fields.length,
++    fields.BANK_PROFIT_CERTIFICATE_FIELD_DEFINITIONS.length,
++  );
++  assert.ok(payload.fields.every((field) => field.value === null));
++  const errors = review.getDocumentReviewRequiredErrors(
++    "bank_certificate",
++    payload.fields,
++    2026,
++  );
++  assert.ok(errors.some((error) => error.startsWith("Tax Year is required")));
++  assert.ok(errors.includes("Enter at least one taxpayer identifier: CNIC or NTN."));
++  assert.ok(errors.includes("Enter at least one bank account identifier: account number or IBAN."));
++  assert.equal(
++    review.isDocumentReviewRequiredField("bank_certificate", L.grossAnnualProfit, payload.fields),
++    true,
++  );
++  assert.equal(
++    review.isDocumentReviewRequiredField("bank_certificate", L.taxpayerCnic, payload.fields),
++    false,
++    "CNIC and NTN form an either/or group rather than two individually required values",
++  );
++});
++
++test("complete reviewed certificate passes, reconciles, and produces typed canonical evidence", () => {
++  const input = makeFields();
++  assert.deepEqual(review.getDocumentReviewRequiredErrors("bank_certificate", input, 2026), []);
++  const approved = fields.readApprovedBankProfitCertificate(input, 2026);
++  assert.deepEqual(approved, {
++    schemaVersion: 1,
++    taxYear: 2026,
++    reportingPeriodStart: "2025-07-01",
++    reportingPeriodEnd: "2026-06-30",
++    bankName: "Example Bank Limited",
++    bankNtn: "1234567",
++    taxpayerName: "Ayesha Example",
++    taxpayerCnic: "42101-1234567-8",
++    taxpayerNtn: null,
++    accountNumber: "00123456789",
++    iban: null,
++    instrumentCategory: "Term Deposit",
++    printedSectionSubsection: "Section 151(1)(b)",
++    grossAnnualProfit: 1000000,
++    taxDeducted: 150000,
++    bankAppliedWithholdingRatePercent: 15,
++    atlStatus: "ATL",
++    netProfitCredited: 850000,
++    currency: "PKR",
++    sukukHolderType: null,
++    sukukReturnBand: null,
++  });
++  assert.equal("taxTreatment" in approved, false);
++  assert.equal("ruleId" in approved, false);
++});
++
++test("gross less withheld tax must equal the printed net credit; values are not repaired", () => {
++  const input = makeFields({ ...fixtureValues, [L.netProfitCredited]: "849,999.99" });
++  const errors = review.getDocumentReviewRequiredErrors("bank_certificate", input, 2026);
++  assert.ok(errors.some((error) => error.includes("must equal Net Profit Credited")));
++  assert.equal(
++    fields.readApprovedBankProfitCertificate(input, 2026),
++    null,
++    "invalid figures cannot be represented as an approved canonical payload",
++  );
++});
++
++test("tax year, reporting dates, rate, CNIC and currency are validated", () => {
++  const input = makeFields({
++    ...fixtureValues,
++    [L.taxYear]: 2025,
++    [L.reportingPeriodStart]: "2025-06-30",
++    [L.withholdingRate]: "101%",
++    [L.taxpayerCnic]: "1234",
++    [L.currency]: "PK",
++  });
++  const errors = review.getDocumentReviewRequiredErrors("bank_certificate", input, 2026);
++  assert.ok(errors.some((error) => error.includes("Tax Year must be 2026")));
++  assert.ok(errors.some((error) => error.includes("Reporting period must fall within Tax Year 2026")));
++  assert.ok(errors.some((error) => error.includes("rate from 0 to 100")));
++  assert.ok(errors.includes("Taxpayer CNIC must contain exactly 13 digits."));
++  assert.ok(errors.includes("Currency must be a three-letter currency code, such as PKR."));
++});
++
++test("Sukuk-specific fields are conditional and never inferred", () => {
++  const input = makeFields({
++    ...fixtureValues,
++    [L.instrumentCategory]: "Sukuk",
++    [L.sukukHolderType]: null,
++    [L.sukukReturnBand]: null,
++  });
++  const errors = review.getDocumentReviewRequiredErrors("bank_certificate", input, 2026);
++  assert.ok(errors.some((error) => error.startsWith(`${L.sukukHolderType} is required`)));
++  assert.ok(errors.some((error) => error.startsWith(`${L.sukukReturnBand} is required`)));
++  assert.equal(review.isDocumentReviewRequiredField("bank_certificate", L.sukukHolderType, input), true);
++  const completed = makeFields({
++    ...fixtureValues,
++    [L.instrumentCategory]: "Sukuk",
++    [L.sukukHolderType]: "Individual/AOP",
++    [L.sukukReturnBand]: "Below PKR 1,000,000",
++  });
++  assert.deepEqual(review.getDocumentReviewRequiredErrors("bank_certificate", completed, 2026), []);
++});
++
++test("duplicate aliases block approval instead of silently selecting one", () => {
++  const input = makeFields();
++  input.push({ label: "Gross Annual Profit", value: 999999 });
++  assert.ok(
++    review
++      .getDocumentReviewRequiredErrors("bank_certificate", input, 2026)
++      .some((error) => error.includes("Gross Annual Profit / Yield: duplicate fields")),
++  );
++});
++
++test("approval, edit invalidation, UI, and filing-completeness gates are wired", () => {
++  const action = fs.readFileSync(path.join(root, "app/actions/extraction.ts"), "utf8");
++  const ui = fs.readFileSync(path.join(root, "components/tax/filing/wizard-documents-step.tsx"), "utf8");
++  const hook = fs.readFileSync(path.join(root, "components/tax/filing/hooks/use-filing-documents.ts"), "utf8");
++  const gate = fs.readFileSync(path.join(root, "lib/tax/filing-completeness.ts"), "utf8");
++  assert.match(action, /mapping: "BANK_PROFIT_CERTIFICATE"/);
++  assert.match(action, /approvedBankProfitCertificate: canonical/);
++  assert.match(action, /invalidateFilingForDocumentChange/);
++  assert.match(ui, /isBankProfitCertificate \|\|/);
++  assert.match(ui, /Gross profit minus tax withheld must/);
++  assert.match(hook, /Save & Approve Map again before continuing/);
++  assert.match(gate, /"bank_certificate"/);
++  assert.match(gate, /Bank Profit Certificate: \$\{error\}/);
++});

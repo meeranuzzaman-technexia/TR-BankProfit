@@ -1,0 +1,22 @@
+
+  services:
+    postgres:
+      image: postgres:16
+      container_name: taxrocket-postgres
+      restart: unless-stopped
+      environment:
+        POSTGRES_USER: taxrocket
+        POSTGRES_PASSWORD: local_dev_password
+        POSTGRES_DB: taxrocket
+      ports:
+        - "5432:5432"
+      volumes:
+        - taxrocket_data:/var/lib/postgresql/data
+      healthcheck:
+        test: ["CMD-SHELL", "pg_isready -U taxrocket -d taxrocket"]
+        interval: 5s
+        timeout: 5s
+        retries: 5
+
+  volumes:
+    taxrocket_data:
