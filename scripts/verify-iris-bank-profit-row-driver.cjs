@@ -233,6 +233,27 @@ test("live: every supported profit category selects only its exact popup option 
   }
 });
 
+test("live: an already-selected supported category with a verified existing row does not block adding another category", async () => {
+  const existing = { code: "64040052", label: TARGETS["64040052"] };
+  const h = harness({
+    fakeOptions: {
+      targetCode: "64040053",
+      targetLabel: TARGETS["64040053"],
+      targetChecked: false,
+      extraChecked: [existing.label],
+      existingSources: [existing],
+    },
+  });
+  const out = await h.run();
+  assert.equal(out.ok, true, JSON.stringify(out));
+  assert.equal(out.status, "row_added");
+  assert.equal(h.fake.rows().length, 2);
+  assert.equal(
+    h.fake.clicks.some((click) => click.inDialog && click.text === "Cancel"),
+    false,
+  );
+});
+
 test("live: resumes the already-open Investment popup shown by IRIS", async () => {
   const fake = new FakeIrisBankProfit();
   fake.addParentRow();
@@ -424,6 +445,27 @@ test("click whitelist: row driver cannot name another row, dialog, selector or r
     () => driver.buildPageScript({ op: "investment_dialog_fill", investment: "", contents: "x" }),
     /invalid Investment detail values/,
   );
+});
+
+test("safety: a checked supported category without its verified existing row still cancels", async () => {
+  for (const existingSources of [
+    [],
+    [{ code: "64040052", label: TARGETS["64040052"], detail: false }],
+  ]) {
+    const h = harness({
+      fakeOptions: {
+        targetCode: "64040053",
+        targetLabel: TARGETS["64040053"],
+        targetChecked: false,
+        extraChecked: [TARGETS["64040052"]],
+        existingSources,
+      },
+    });
+    const out = await h.run();
+    assert.equal(out.ok, false);
+    assert.equal(out.status, "unexpected_sources_selected");
+    assert.equal(h.fake.clicks.some((click) => click.inDialog && click.text === "ADD"), false);
+  }
 });
 
 test("desktop build packages the narrow Bank Profit row driver and wires it before live filling", () => {

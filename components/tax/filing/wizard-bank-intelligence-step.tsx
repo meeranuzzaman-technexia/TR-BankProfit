@@ -923,7 +923,10 @@ export function WizardBankIntelligenceStep({
                 {isFullView ? "Exit Full View" : "Open Full View"}
               </Button>
               {selectedRows.some(
-                (row) => row.classificationStatus === "SUGGESTED",
+                (row) =>
+                  row.classificationStatus === "SUGGESTED" ||
+                  (row.classificationStatus === "POTENTIAL_INCOME" &&
+                    row.suggestedCategory === "BANK_PROFIT"),
               ) && (
                 <Button
                   type="button"

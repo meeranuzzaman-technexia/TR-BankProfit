@@ -38,7 +38,7 @@
  *   - Dry mode never clicks inside the page; it only reads and reports.
  */
 
-const BUILD_TAG = "fix60-bank-profit-category-routing-20261023";
+const BUILD_TAG = "fix61-bank-profit-existing-category-20261023";
 
 // Kept in step with lib/tax/wealth-rows.ts. A test compares the two, so a
 // category added on one side without the other fails the build.

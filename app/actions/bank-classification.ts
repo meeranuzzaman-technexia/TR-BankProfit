@@ -695,7 +695,7 @@ export async function autoReviewSafeBankTransactionsAction(
         filingDraftId: draft.id,
         userId: draft.userId,
         bankAccountId: account.id,
-        classificationStatus: "SUGGESTED",
+        classificationStatus: { in: ["SUGGESTED", "POTENTIAL_INCOME"] },
         suggestedEntryType: { not: null },
         suggestedCategory: { not: null },
       },
@@ -706,6 +706,7 @@ export async function autoReviewSafeBankTransactionsAction(
         description: true,
         debit: true,
         credit: true,
+        classificationStatus: true,
         suggestedEntryType: true,
         suggestedCategory: true,
       },
@@ -726,6 +727,12 @@ export async function autoReviewSafeBankTransactionsAction(
       .filter((transaction) => !heldBackAsTransfers.has(transaction.id))
       .filter(
         (transaction) =>
+          transaction.classificationStatus === "SUGGESTED" ||
+          (transaction.classificationStatus === "POTENTIAL_INCOME" &&
+            transaction.suggestedCategory === "BANK_PROFIT"),
+      )
+      .filter(
+        (transaction) =>
           !bankEntryDirectionError(transaction, transaction.suggestedEntryType),
       )
       .filter(
@@ -734,11 +741,10 @@ export async function autoReviewSafeBankTransactionsAction(
             safeExpenseCategories.includes(
               transaction.suggestedCategory ?? "",
             )) ||
-          // Payroll-evidence income is safe to batch-approve because the
-          // description keyword itself named the source: salary and pension
-          // credits land here by explicit keyword rule, GIFT never does.
+          // Only the narrow safe-income categories are batch-approved; the
+          // status filter above admits AI potential income for Bank Profit only.
           (transaction.suggestedEntryType === "INCOME" &&
-            ["SALARY", "PENSION"].includes(
+            ["SALARY", "PENSION", "BANK_PROFIT"].includes(
               transaction.suggestedCategory ?? "",
             )) ||
           (isMyselfBusinessBankFlow(draft) &&

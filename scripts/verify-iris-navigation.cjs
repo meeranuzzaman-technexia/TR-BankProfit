@@ -2165,6 +2165,79 @@ test("overwrite guard surfaces IRIS-vs-packet conflicts and unexpected pre-fille
   assert.equal(clean.paused, false);
 });
 
+test("Bank Profit ignores a filled non-target category but still blocks a filled target category", async () => {
+  const filler = require("../electron-connect/iris-row-filler");
+  const driver = require("../electron-connect/iris-bank-profit-row-driver");
+  const tour = {
+    complete: true,
+    sections: [{
+      id: "other_sources_tax_deductions",
+      rows: [{ code: "64040053" }],
+      mappingVerified: true,
+    }],
+  };
+  const packet = {
+    filingPacket: {
+      taxYear: 2026,
+      snapshot: {
+        portalFieldMap: [{
+          irisCode: "64040053",
+          column: "Taxable Amount",
+          value: "1250000",
+          bankProfitInvestment: "Government securities",
+          bankProfitContents: "Certificate detail",
+        }],
+      },
+    },
+  };
+  const makeCtx = ({ snapshot, status }) => sandbox(["runRealIrisAutofill"], {
+    ensureWorkerWindow: async () => ({
+      isDestroyed: () => false,
+      webContents: { executeJavaScript: async () => ({ returnWorkspace: true }) },
+    }),
+    launchState: { accountReference: "1234567890123" },
+    activeJobExecutionLog: null,
+    pushStatus: () => {},
+    captureWindowScreenshot: async () => null,
+    lastSectionTour: tour,
+    irisNavigation: {
+      ...navigation,
+      navigateToSection: async () => ({ ok: true, status: "switched", gridTitle: "Final Tax" }),
+    },
+    irisBankProfitRowDriver: {
+      ...driver,
+      ensureBankProfitFinalTaxRow: async () => ({ ok: true, status: "row_present" }),
+    },
+    irisRowFiller: {
+      ...filler,
+      snapshotIrisRows: async () => snapshot,
+      fillIrisRows: async (_win, fields) => ({
+        results: fields.map((field) => status === filler.FILL_STATUS.OVERWRITE_NEEDS_CONFIRMATION
+          ? { ...field, status, existingValue: "2465", plannedValue: "1250000" }
+          : { ...field, status }),
+        summary: {},
+      }),
+    },
+  });
+
+  const nonTargetFilled = await makeCtx({
+    snapshot: [
+      { code: "64040052", description: "Bank Accounts / Deposits", cells: [{ editable: true, value: "2465" }] },
+      { code: "64040053", description: "Government Securities", cells: [{ editable: true, value: "" }] },
+    ],
+    status: filler.FILL_STATUS.FILLED,
+  }).runRealIrisAutofill(packet, { id: "bank-profit-non-target", type: "tax_assisted_filing" }, "live");
+  assert.equal(nonTargetFilled.paused, false);
+  assert.deepEqual(nonTargetFilled.result.unexpectedPrefill, []);
+
+  const targetFilled = await makeCtx({
+    snapshot: [{ code: "64040053", description: "Government Securities", cells: [{ editable: true, value: "2465" }] }],
+    status: filler.FILL_STATUS.OVERWRITE_NEEDS_CONFIRMATION,
+  }).runRealIrisAutofill(packet, { id: "bank-profit-target", type: "tax_assisted_filing" }, "live");
+  assert.equal(targetFilled.paused, true);
+  assert.match(targetFilled.pauseMessage, /64040053 \(IRIS 2465, packet 1250000\).*NOT overwritten/);
+});
+
 test("wealth figures in the packet are held out of the Salary fill and reported as prepared, not entered", async () => {
   const tour = {
     complete: true,
@@ -4130,6 +4203,11 @@ test("completion card: unchecked manual entry is never certified as complete", (
   const { text } = renderHandoffCompletion({ salary: "confirmed_by_taxpayer", manualUnchecked: ["salary"] });
   assert.match(text, /Return partly prepared/);
   assert.match(text, /agent could not check/);
+});
+
+test("completion card: Bank Profit-only filing has no employer-review block", () => {
+  const { text } = renderHandoffCompletion({ employers: "none" });
+  assert.doesNotMatch(text, /Employer details/);
 });
 
 // fix43: fixed business contracts; no live taxpayer data or external requests.

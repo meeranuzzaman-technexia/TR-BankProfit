@@ -171,7 +171,7 @@ function resolveAutofillMode(jobContext) {
 // process appear fully updated (the mixed fix10/fix11 rollout hid this).
 const irisBusinessRowDriver = require("./iris-business-row-driver");
 const irisBankProfitRowDriver = require("./iris-bank-profit-row-driver");
-const AGENT_BUILD_TAG = "fix60-bank-profit-category-routing-20261023";
+const AGENT_BUILD_TAG = "fix61-bank-profit-existing-category-20261023";
 function getAgentBuildLabel() {
   return `${AGENT_BUILD_TAG} | navigator: ${irisNavigation.BUILD_TAG} | filler: ${irisRowFiller.BUILD_TAG} | employer: ${irisEmployerDriver.BUILD_TAG} | wealth: ${irisWealthDriver.BUILD_TAG} | bank-profit-row: ${irisBankProfitRowDriver.BUILD_TAG} | pension: ${PENSION_GUARD_BUILD_TAG}`;
 }

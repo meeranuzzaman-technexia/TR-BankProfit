@@ -343,6 +343,28 @@ test("transfer lookalike: wired into the Continue gate, both click actions and A
   assert.match(actions, /heldBackAsTransfers/);
 });
 
+test("Approve All Safe includes explicitly classified Bank Profit income", () => {
+  const actions = fs.readFileSync(
+    path.join(root, "app/actions/bank-classification.ts"),
+    "utf8",
+  );
+  assert.match(actions, /\["SALARY", "PENSION", "BANK_PROFIT"\]\.includes/);
+  assert.match(
+    actions,
+    /classificationStatus:\s*\{\s*in:\s*\["SUGGESTED", "POTENTIAL_INCOME"\]/,
+  );
+  const ui = fs.readFileSync(
+    path.join(root, "components/tax/filing/wizard-bank-intelligence-step.tsx"),
+    "utf8",
+  );
+  const buttonGate = ui.slice(
+    ui.indexOf("{selectedRows.some("),
+    ui.indexOf("Approve All Safe Transactions"),
+  );
+  assert.match(buttonGate, /row\.classificationStatus === "POTENTIAL_INCOME"/);
+  assert.match(buttonGate, /row\.suggestedCategory === "BANK_PROFIT"/);
+});
+
 test("undo: a row goes back to what the rules say, not to the taxpayer's own earlier manual choice", () => {
   const actions = fs.readFileSync(
     path.join(root, "app/actions/bank-classification.ts"),

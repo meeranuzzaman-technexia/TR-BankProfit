@@ -981,35 +981,37 @@ function HandoffCompleteCard({
             },
     );
 
-    rows.push(
-      scope?.employers === "confirmed_by_taxpayer"
-        ? {
-            title: "Employer details",
-            detail:
-              "Added by you in FBR. You confirmed this; the agent did not check it.",
-            state: "done",
-          }
-        : scope?.employers === "listed"
+    if (scope?.employers !== "none") {
+      rows.push(
+        scope?.employers === "confirmed_by_taxpayer"
           ? {
               title: "Employer details",
               detail:
-                "Added by the agent by registered name; FBR filled in the registration number.",
+                "Added by you in FBR. You confirmed this; the agent did not check it.",
               state: "done",
             }
-          : scope?.employers === "needs_review"
+          : scope?.employers === "listed"
             ? {
                 title: "Employer details",
                 detail:
-                  "An employer could not be added safely. Check Employment, Salary, Employer Details in FBR.",
-                state: "attention",
+                  "Added by the agent by registered name; FBR filled in the registration number.",
+                state: "done",
               }
-            : {
-                title: "Employer details",
-                detail:
-                  "No employer was added by this run. If FBR asks for employer details, add them under Employment, Salary, Add Employer Details.",
-                state: "attention",
-              },
-    );
+            : scope?.employers === "needs_review"
+              ? {
+                  title: "Employer details",
+                  detail:
+                    "An employer could not be added safely. Check Employment, Salary, Employer Details in FBR.",
+                  state: "attention",
+                }
+              : {
+                  title: "Employer details",
+                  detail:
+                    "No employer was added by this run. If FBR asks for employer details, add them under Employment, Salary, Add Employer Details.",
+                  state: "attention",
+                },
+      );
+    }
   }
 
   rows.push(

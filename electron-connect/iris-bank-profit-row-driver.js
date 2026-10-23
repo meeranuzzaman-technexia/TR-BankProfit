@@ -7,7 +7,7 @@
  * one exact approved profit category, and press only that dialog's ADD or
  * Cancel. It never saves, calculates, submits, or touches payment controls.
  */
-const BUILD_TAG = "fix60-bank-profit-category-routing-20261023";
+const BUILD_TAG = "fix61-bank-profit-existing-category-20261023";
 const BANK_PROFIT_TARGETS = Object.freeze({
   "64040052": "Profit on Debt u/s 151(1)(b) from Bank Accounts / Deposits",
   "64040053": "Profit on Debt u/s 151(1)(c) from Government Securities",
@@ -31,6 +31,7 @@ const FINAL_TAX_COLUMNS = Object.freeze([
 const PAGE_CFG = Object.freeze({
   code: BANK_PROFIT_CODE,
   label: BANK_PROFIT_LABEL,
+  targets: BANK_PROFIT_TARGETS,
   gridTitle: GRID_TITLE,
   dialogTitle: DIALOG_TITLE,
   investmentDialogTitle: INVESTMENT_DIALOG_TITLE,
@@ -187,6 +188,50 @@ function bankProfitPageOp(step) {
         })),
       };
     });
+  const existingSourceLabels = () => {
+    const allRows = rows();
+    return allRows
+      .filter((row) => !row.classList.contains("section-detail-child-row"))
+      .map((row) => {
+        const code = String(row.id || "").trim();
+        const expectedLabel = CFG.targets?.[code];
+        const description = row.querySelector(".row-description-text");
+        const codeCell = row.querySelector(".data-first-child");
+        const inputs = Array.from(
+          row.querySelectorAll(
+            ".columns-parent .data-middle-child-wapper input:not([type=\"hidden\"])",
+          ),
+        );
+        const detailRows = allRows.filter(
+          (candidate) =>
+            candidate.id === code &&
+            candidate.classList.contains("section-detail-child-row"),
+        );
+        const detailDescription = detailRows[0]?.querySelector(".row-description-text");
+        const detailInputs = detailRows[0]
+          ? Array.from(
+              detailRows[0].querySelectorAll(
+                ".columns-parent .data-middle-child-wapper input:not([type=\"hidden\"])",
+              ),
+            )
+          : [];
+        return expectedLabel &&
+          description &&
+          norm(description.textContent) === norm(expectedLabel) &&
+          codeCell &&
+          String(codeCell.textContent || "").trim() === code &&
+          inputs.length === CFG.columns.length &&
+          inputs.every((input) => input.disabled) &&
+          detailRows.length === 1 &&
+          detailDescription &&
+          norm(detailDescription.textContent).startsWith(`${norm(expectedLabel)} -`) &&
+          detailInputs.length === CFG.columns.length &&
+          detailInputs.every((input) => !input.disabled && !input.readOnly)
+          ? expectedLabel
+          : null;
+      })
+      .filter(Boolean);
+  };
   const checkedOptions = (dialog) =>
     Array.from(dialog.querySelectorAll(CFG.cardSelector))
       .filter(checkedCard)
@@ -206,6 +251,7 @@ function bankProfitPageOp(step) {
       finalTaxExpanded: Boolean(panel && panelExpanded(panel)),
       columns: panel ? columnsOf(panel) : [],
       rows: targetRows(),
+      existingSourceLabels: existingSourceLabels(),
     };
   }
 
@@ -410,6 +456,7 @@ function buildPageScript(step, targetCode = step?.code || BANK_PROFIT_CODE) {
       ...PAGE_CFG,
       code,
       label: BANK_PROFIT_TARGETS[code],
+      targets: BANK_PROFIT_TARGETS,
     },
   })})`;
 }
@@ -469,7 +516,7 @@ function verifiedParentOnlyRow(snapshot) {
 
 /**
  * Ensure the approved profit category's writable detail row exists. In LIVE mode it may press
- * ADD only when the exact Bank Profit card is the sole checked source. In dry
+ * ADD only when the target and any already-present verified source cards are checked. In dry
  * or verify-only mode it is read-only. Returns a verified row contract or a
  * specific, safely-held reason.
  */
@@ -666,6 +713,7 @@ async function ensureBankProfitFinalTaxRow(windowInstance, options = {}) {
   }
   if (state.status !== "ok")
     return fail("inspection_failed", `IRIS inspection returned ${state.status}. No dialog action was taken.`);
+  const verifiedExistingLabels = new Set(state.existingSourceLabels || []);
   if (state.dialogs.some((title) => ![DIALOG_TITLE, INVESTMENT_DIALOG_TITLE].includes(title)))
     return fail(
       "unexpected_dialog",
@@ -768,7 +816,7 @@ async function ensureBankProfitFinalTaxRow(windowInstance, options = {}) {
       { cancel: true },
     );
   const otherChecked = (selection.checkedLabels || []).filter(
-    (label) => label !== target.label,
+    (label) => label !== target.label && !verifiedExistingLabels.has(label),
   );
   if (otherChecked.length)
     return fail(
@@ -796,7 +844,7 @@ async function ensureBankProfitFinalTaxRow(windowInstance, options = {}) {
       );
     selection = await run({ op: "dialog_state", title: DIALOG_TITLE });
     const recheckedOthers = (selection.checkedLabels || []).filter(
-      (label) => label !== target.label,
+      (label) => label !== target.label && !verifiedExistingLabels.has(label),
     );
     if (
       selection.status !== "ok" ||
@@ -809,7 +857,7 @@ async function ensureBankProfitFinalTaxRow(windowInstance, options = {}) {
         "After selecting Bank Profit, the popup state changed unexpectedly; no ADD was attempted.",
         { cancel: true },
       );
-    if (selection.checkedCount !== 1 || recheckedOthers.length)
+    if (recheckedOthers.length)
       return fail(
         "unexpected_sources_selected_after_bank_profit",
         `Other Final Tax sources became selected after choosing Bank Profit (${recheckedOthers.join(", ")}); the chooser was cancelled.`,
@@ -883,9 +931,9 @@ async function ensureBankProfitFinalTaxRow(windowInstance, options = {}) {
       { cancel: true },
     );
   const finalOtherChecked = (finalSelection.checkedLabels || []).filter(
-    (label) => label !== target.label,
+    (label) => label !== target.label && !verifiedExistingLabels.has(label),
   );
-  if (finalSelection.checkedCount !== 1 || finalOtherChecked.length)
+  if (finalOtherChecked.length)
     return fail(
       "unexpected_sources_selected_before_add",
       `Other Final Tax sources became selected before ADD (${finalOtherChecked.join(", ")}); nothing was added.`,
@@ -925,7 +973,7 @@ async function ensureBankProfitFinalTaxRow(windowInstance, options = {}) {
   if (!verifiedDetailRow(appeared.value)) return addInvestmentDetail(true);
   note(
     "row_added",
-    `Added the verified ${target.label} (${target.code}) row under Other Sources > Tax Deductions > Final Tax. Only that source was selected; the return was not saved, calculated, or submitted.`,
+    `Added the verified ${target.label} (${target.code}) row under Other Sources > Tax Deductions > Final Tax. Any other checked supported sources already had verified rows; the return was not saved, calculated, or submitted.`,
   );
   return { ok: true, status: "row_added", added: true, setup };
 }

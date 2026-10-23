@@ -29,7 +29,7 @@ const path = require("path");
  * shipped code, never invented; `--self-test` proves that against this tree, so a renamed
  * function has to be updated here in the same commit or this check cries wolf.
  */
-const SYNC_STAMP = "fix60-bank-profit-category-routing-20261023";
+const SYNC_STAMP = "fix61-bank-profit-existing-category-20261023";
 const MARKERS = [
   [
     "lib/tax/portal-field-map.ts",
@@ -121,7 +121,7 @@ const MARKERS = [
   ],
   [
     "electron-connect/iris-employer-driver.js",
-    ["runEmployerDriver", "fix60-bank-profit-category-routing-20261023"],
+    ["runEmployerDriver", "fix61-bank-profit-existing-category-20261023"],
     "the employer driver (exact registered name only)",
   ],
   [
@@ -140,7 +140,7 @@ const MARKERS = [
   [
     "electron-connect/main.js",
     [
-      "fix60-bank-profit-category-routing-20261023",
+      "fix61-bank-profit-existing-category-20261023",
       "collectAcknowledgedAutofillItems",
       "irisBankProfitRowDriver.ensureBankProfitFinalTaxRow",
       "isBankProfitFinalTaxGroup",
@@ -160,7 +160,7 @@ const MARKERS = [
   [
     "electron-connect/iris-bank-profit-row-driver.js",
     [
-      "fix60-bank-profit-category-routing-20261023",
+      "fix61-bank-profit-existing-category-20261023",
       "ensureBankProfitFinalTaxRow",
       "Add Final Tax",
       "64040052",
@@ -169,13 +169,13 @@ const MARKERS = [
   ],
   [
     "electron-connect/iris-business-row-driver.js",
-    ["fix60-bank-profit-category-routing-20261023"],
+    ["fix61-bank-profit-existing-category-20261023"],
     "the business row driver build stamp",
   ],
   [
     "electron-connect/iris-navigation.js",
     [
-      "fix60-bank-profit-category-routing-20261023",
+      "fix61-bank-profit-existing-category-20261023",
       "salaryVerified",
       "This inspection did not enter values",
     ],
@@ -183,7 +183,7 @@ const MARKERS = [
   ],
   [
     "electron-connect/iris-row-filler.js",
-    ["fix60-bank-profit-category-routing-20261023", "readback_mismatch"],
+    ["fix61-bank-profit-existing-category-20261023", "readback_mismatch"],
     "every write is re-read before it counts",
   ],
   [
@@ -194,7 +194,7 @@ const MARKERS = [
   [
     "electron-connect/iris-wealth-driver.js",
     [
-      "fix60-bank-profit-category-routing-20261023",
+      "fix61-bank-profit-existing-category-20261023",
       "planCashTarget",
       "add_to_iris_value",
     ],
@@ -202,7 +202,7 @@ const MARKERS = [
   ],
   [
     "electron-connect/pension-guard.js",
-    ["fix60-bank-profit-category-routing-20261023"],
+    ["fix61-bank-profit-existing-category-20261023"],
     "the pension packet safety guard build stamp",
   ],
   [

@@ -23,6 +23,7 @@ class FakeIrisBankProfit {
     lateAddDisabled = false,
     preexistingRow = false,
     malformedPreexistingRow = false,
+    existingSources = [],
     targetCode = CODE,
     targetLabel = LABEL,
   } = {}) {
@@ -40,6 +41,7 @@ class FakeIrisBankProfit {
     this.lateChangeInjected = false;
     this.preexistingRow = preexistingRow;
     this.malformedPreexistingRow = malformedPreexistingRow;
+    this.existingSources = existingSources;
     this.code = targetCode;
     this.label = targetLabel;
     this.dom = new JSDOM(`<!doctype html><html><body><main class="iris-data"></main></body></html>`, {
@@ -58,6 +60,7 @@ class FakeIrisBankProfit {
     this.document.addEventListener("change", (event) => this.onChange(event));
     this.document.addEventListener("input", (event) => this.onChange(event));
     if (this.preexistingRow) this.addRows({ malformed: this.malformedPreexistingRow });
+    for (const source of this.existingSources) this.addRows(source);
     this.webContents = {
       executeJavaScript: async (script) => {
         const result = this.window.eval(script);
@@ -102,17 +105,17 @@ class FakeIrisBankProfit {
     reference.parentNode.insertBefore(row, reference.nextSibling);
   }
 
-  makeRow(detail) {
+  makeRow(detail, codeValue = this.code, labelValue = this.label) {
     const row = this.document.createElement("div");
     row.className = `tableRows dataRow${detail ? " section-detail-child-row" : ""}`;
-    row.id = this.code;
+    row.id = codeValue;
     const label = this.document.createElement("div");
     label.className = "row-description-text";
-    label.textContent = `${this.label}${detail ? " --" : ""}`;
+    label.textContent = `${labelValue}${detail ? " --" : ""}`;
     row.appendChild(label);
     const code = this.document.createElement("div");
     code.className = "data-first-child";
-    code.textContent = this.code;
+    code.textContent = codeValue;
     row.appendChild(code);
     const cells = this.document.createElement("div");
     cells.className = "columns-parent";
@@ -159,7 +162,19 @@ class FakeIrisBankProfit {
     this.insertAfter(detail, parent);
   }
 
-  addRows({ malformed = false } = {}) {
+  addRows({ malformed = false, code = this.code, label = this.label, detail: includeDetail = true } = {}) {
+    if (code !== this.code) {
+      const body = this.rowBody();
+      const anchor = body?.querySelector('.dataRow[id="999919"]') || body?.querySelector(".dataRow");
+      const parent = this.makeRow(false, code, label);
+      this.insertAfter(parent, anchor || body.firstElementChild || body);
+      if (includeDetail) {
+        const detail = this.makeRow(true, code, label);
+        detail.querySelector(".row-description-text").textContent = `${label} - existing investment - existing contents`;
+        this.insertAfter(detail, parent);
+      }
+      return;
+    }
     this.addParentRow();
     if (malformed) {
       this.rows()[0]?.querySelector(".data-middle-child-wapper:last-child")?.remove();
@@ -306,7 +321,7 @@ class FakeIrisBankProfit {
         const input = card.querySelector('input[type="checkbox"]');
         return Boolean(input && input.checked && !input.disabled);
       });
-      if (selected.length === 1 && selected[0].querySelector("p")?.textContent.trim() === this.label) {
+      if (selected.some((card) => card.querySelector("p")?.textContent.trim() === this.label)) {
         this.addParentRow();
         dialog.remove();
       }
