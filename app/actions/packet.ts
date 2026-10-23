@@ -48,7 +48,6 @@ import {
 import {
   bankProfitSubcategoryFromCertificate,
   type BankProfitPortalSource,
-  type BankProfitSubcategory,
 } from "@/lib/tax/iris-bank-profit-capture";
 
 async function getOwnedDraft(draftId: string) {
@@ -318,7 +317,7 @@ export async function generateFilingPacketAction(
       latestPacket,
       taxCredits,
       salaryCertificate,
-      bankProfitCertificate,
+      bankProfitCertificates,
       businessSelections,
       pensionSelections,
       businessBalanceSheet,
@@ -414,15 +413,15 @@ export async function generateFilingPacketAction(
         },
         select: { extractedData: true },
       }),
-      prisma.document.findFirst({
+      prisma.document.findMany({
         where: {
           filingDraftId: draft.id,
           userId: draft.userId,
-          documentType: "bank_certificate",
+          documentType: { startsWith: "bank_certificate" },
           extractionStatus: "MAPPED",
         },
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-        select: { id: true, extractedData: true },
+        select: { id: true, documentType: true, extractedData: true },
       }),
       prisma.filingIncomeSelection.findMany({
         where: {
@@ -531,43 +530,13 @@ export async function generateFilingPacketAction(
     const salaryCertificateGrossSalary = extractMappedSalaryGross(
       salaryCertificate?.extractedData ?? null,
     );
-    let bankProfitSource: BankProfitPortalSource | undefined;
+    const bankProfitSources: BankProfitPortalSource[] = [];
     if (parsedIncomeSources.includes("bank_profit")) {
-      if (!bankProfitCertificate) {
+      if (bankProfitCertificates.length === 0) {
         return {
           success: false,
           error:
             "Map and approve the Bank Profit Certificate before generating the IRIS packet.",
-        };
-      }
-      let payload: {
-        fields?: Array<{ label?: unknown; value?: unknown }>;
-        approvedBankProfitCertificate?: ApprovedBankProfitCertificate;
-      };
-      try {
-        payload = JSON.parse(bankProfitCertificate.extractedData || "{}");
-      } catch {
-        return {
-          success: false,
-          error: "The approved Bank Profit Certificate is unreadable. Re-map it before filing.",
-        };
-      }
-      const approved = readApprovedBankProfitCertificate(
-        payload.fields,
-        draftData.taxYear,
-      );
-      if (!approved || !payload.approvedBankProfitCertificate) {
-        return {
-          success: false,
-          error: "The Bank Profit Certificate is not currently approved. Review and map it again.",
-        };
-      }
-      const certificateSubcategory = bankProfitSubcategoryFromCertificate(approved);
-      if (!certificateSubcategory) {
-        return {
-          success: false,
-          error:
-            "The approved Bank Profit Certificate does not identify a supported Section 151 category. Review its printed section/instrument fields.",
         };
       }
       const calculationLines = await prisma.filingTaxCalculationLine.findMany({
@@ -583,21 +552,13 @@ export async function generateFilingPacketAction(
           calculatedTax: true,
         },
       });
-      if (calculationLines.length !== 1) {
+      if (calculationLines.length === 0) {
         return {
           success: false,
           error:
-            "The current calculation must contain exactly one Bank Profit line before IRIS mapping. Recalculate Tax.",
+            "The current calculation must contain Bank Profit lines before IRIS mapping. Recalculate Tax.",
         };
       }
-      const calculationLine = calculationLines[0];
-      if (calculationLine.subcategory !== certificateSubcategory) {
-        return {
-          success: false,
-          error: `Bank Profit selection (${calculationLine.subcategory}) does not match the approved certificate (${certificateSubcategory}). Correct the selection or certificate and recalculate Tax.`,
-        };
-      }
-      const statementGrossProfit = toMoneyNumber(calculationLine.taxBase);
       const currentLedgerGrossProfit = toMoneyNumber(
         sumMoney(
           ledgerEntries
@@ -611,40 +572,45 @@ export async function generateFilingPacketAction(
             .map((entry) => entry.amount),
         ),
       );
-      if (currentLedgerGrossProfit !== statementGrossProfit) {
+      const calculatedGrossProfit = toMoneyNumber(sumMoney(calculationLines.map((line) => line.taxBase)));
+      if (currentLedgerGrossProfit !== calculatedGrossProfit) {
         return {
           success: false,
           error:
             "Bank-statement profit changed after the saved calculation. Recalculate Tax before generating the IRIS packet.",
         };
       }
-      if (statementGrossProfit !== approved.grossAnnualProfit) {
-        return {
-          success: false,
-          error: `Bank-statement profit (PKR ${statementGrossProfit.toLocaleString("en-PK")}) does not match the approved certificate gross (PKR ${approved.grossAnnualProfit.toLocaleString("en-PK")}). Reconcile them before IRIS entry.`,
-        };
+      const lineByCategory = new Map(calculationLines.map((line) => [line.subcategory, line]));
+      for (const certificate of bankProfitCertificates) {
+        let payload: { fields?: Array<{ label?: unknown; value?: unknown }>; approvedBankProfitCertificate?: ApprovedBankProfitCertificate };
+        try { payload = JSON.parse(certificate.extractedData || "{}"); }
+        catch { return { success: false, error: "An approved Bank Profit Certificate is unreadable. Re-map it before filing." }; }
+        const approved = readApprovedBankProfitCertificate(payload.fields, draftData.taxYear);
+        const subcategory = approved && bankProfitSubcategoryFromCertificate(approved);
+        if (!approved || !payload.approvedBankProfitCertificate || !subcategory)
+          return { success: false, error: "An approved Bank Profit Certificate is incomplete or does not identify a supported Section 151 category." };
+        if (calculationLines.length > 1 && certificate.documentType !== `bank_certificate:${subcategory}`) continue;
+        const line = lineByCategory.get(subcategory);
+        if (!line || bankProfitSources.some((source) => source.subcategory === subcategory))
+          return { success: false, error: `Provide exactly one approved Bank Profit Certificate for ${subcategory}, matching the current calculation.` };
+        const gross = toMoneyNumber(line.taxBase);
+        if (gross !== approved.grossAnnualProfit)
+          return { success: false, error: `Calculated ${subcategory} profit (PKR ${gross.toLocaleString("en-PK")}) does not match its approved certificate gross (PKR ${approved.grossAnnualProfit.toLocaleString("en-PK")}).` };
+        const investment = approved.instrumentCategory.trim();
+        if (investment.length > 50)
+          return { success: false, error: "A Bank Profit instrument/category is longer than the 50 characters accepted by IRIS." };
+        bankProfitSources.push({
+          documentId: certificate.id,
+          subcategory,
+          investment,
+          contents: [`1. ${approved.iban || approved.accountNumber}`, `2. ${investment}`, `3. ${approved.bankName.trim()}`].join("\n"),
+          statementGrossProfit: gross,
+          taxDeducted: approved.taxDeducted,
+          taxChargeable: toMoneyNumber(line.calculatedTax),
+        });
       }
-      const investment = approved.instrumentCategory.trim();
-      if (investment.length > 50) {
-        return {
-          success: false,
-          error:
-            "The approved Bank Profit instrument/category is longer than the 50 characters accepted by IRIS. Shorten it to the certificate's concise printed category and approve it again.",
-        };
-      }
-      bankProfitSource = {
-        documentId: bankProfitCertificate.id,
-        subcategory: calculationLine.subcategory as BankProfitSubcategory,
-        investment,
-        contents: [
-          `1. ${approved.iban || approved.accountNumber}`,
-          `2. ${approved.instrumentCategory.trim()}`,
-          `3. ${approved.bankName.trim()}`,
-        ].join("\n"),
-        statementGrossProfit,
-        taxDeducted: approved.taxDeducted,
-        taxChargeable: toMoneyNumber(calculationLine.calculatedTax),
-      };
+      if (bankProfitSources.length !== calculationLines.length)
+        return { success: false, error: "Upload and approve one Bank Profit Certificate for every selected Bank Profit category." };
     }
 
     const bankAccountsForPacket = await prisma.bankAccount.findMany({
@@ -767,7 +733,7 @@ export async function generateFilingPacketAction(
         : 0,
       taxWithheld: draftData.taxWithheld ? Number(draftData.taxWithheld) : 0,
       pensionSource: pensionSource ?? undefined,
-      bankProfitSource,
+      bankProfitSources,
       salaryCertificateTaxWithheld,
       salaryCertificateGrossSalary,
       // Employers named on the reviewed salary certificate; the agent adds

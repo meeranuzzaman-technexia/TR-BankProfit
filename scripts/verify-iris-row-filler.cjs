@@ -278,6 +278,26 @@ test("tax deductions: 64020007 Final Tax has two writable cells followed by deri
   assert.equal(cells[2].value, "", "the agent must not type the calculated tax");
 });
 
+test("bank profit: a matching disabled Tax Chargeable value is accepted as IRIS-derived readback", () => {
+  const html = `
+    <div class="heading-bar"><div><strong>Description</strong><strong>Code</strong><strong>Taxable Amount</strong><strong>Tax Deducted</strong><strong>Tax Chargeable</strong></div></div>
+    <div class="tableRows dataRow" id="64330055">
+      <div class="row-description-text">Return on Investment in Sukuks u/s 151(1A) @ 12.5%</div>
+      <div class="columns-parent">
+        <div class="data-middle-child-wapper"><input value="1600000"></div>
+        <div class="data-middle-child-wapper"><input value="200000"></div>
+        <div class="data-middle-child-wapper"><input value="200000" disabled></div>
+      </div>
+    </div>`;
+  const dom = new JSDOM(html, { runScripts: "outside-only" });
+  const prepared = filler.prepareField(field("sukuk.tax", "64330055", "Tax Chargeable", 200000));
+  const [result] = dom.window.eval(filler.buildInPageFillScript([prepared], { dryRun: false }));
+  assert.equal(result.status, filler.FILL_STATUS.ALREADY_CORRECT, JSON.stringify(result));
+  dom.window.document.querySelectorAll("input")[2].value = "199999";
+  const [mismatch] = dom.window.eval(filler.buildInPageFillScript([prepared], { dryRun: false }));
+  assert.equal(mismatch.status, filler.FILL_STATUS.COLUMN_DISABLED, JSON.stringify(mismatch));
+});
+
 test("pension surcharge: 923184 receives ten percent of the calculated pension tax", () => {
   const { byKey } = runFill("computations.html", [
     field("pension.surcharge", "923184", "Total Income", 10000),

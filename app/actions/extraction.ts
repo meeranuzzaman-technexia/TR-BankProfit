@@ -20,6 +20,9 @@ import {
   readApprovedBankProfitCertificate,
 } from "@/lib/tax/bank-profit-certificate-fields";
 import { invalidateFilingForDocumentChange } from "@/lib/tax/document-invalidation";
+import { baseFilingDocumentType, isBankProfitCertificate } from "@/lib/tax/bank-profit-document-slot";
+import { bankProfitCertificateSubcategory } from "@/lib/tax/bank-profit-document-slot";
+import { bankProfitSubcategoryFromCertificate } from "@/lib/tax/iris-bank-profit-capture";
 
 import {
   ensureBusinessBalanceReviewFields,
@@ -74,6 +77,7 @@ import {
 
 /** Adds the visible blank placeholders a document type must have for review. */
 function ensureReviewFields(documentType: string, extracted: unknown): unknown {
+  documentType = baseFilingDocumentType(documentType);
   let review = extracted;
   if (documentType === "pension_statement")
     review = ensurePensionStatementReviewFields(extracted);
@@ -263,6 +267,7 @@ function normalizeDocumentText(value: unknown) {
 }
 
 function buildExtractionPrompt(documentType: string) {
+  documentType = baseFilingDocumentType(documentType);
   const rule = DOCUMENT_SLOT_RULES[documentType];
   if (!rule) return EXTRACTION_PROMPT;
 
@@ -274,6 +279,7 @@ Verify the actual document content against this slot. Do not label a bank statem
 }
 
 function validateExtractedDocument(documentType: string, extracted: unknown) {
+  documentType = baseFilingDocumentType(documentType);
   const rule = DOCUMENT_SLOT_RULES[documentType];
   if (!rule) return { valid: true as const };
 
@@ -560,7 +566,7 @@ export async function getFilingDocumentsAction(draftId: string) {
       documents: documents.map(({ extractedData, ...document }) => ({
         ...document,
         reviewRequiredErrors: storedDocumentReviewRequiredErrors(
-          document.documentType,
+          baseFilingDocumentType(document.documentType),
           extractedData,
           draft.taxYear,
         ),
@@ -657,7 +663,7 @@ export async function updateDocumentExtractionAction(
 
     let payloadForStorage = normalized.payload;
     if (
-      document.documentType === "bank_certificate" &&
+      isBankProfitCertificate(document.documentType) &&
       payloadForStorage &&
       typeof payloadForStorage === "object" &&
       !Array.isArray(payloadForStorage)
@@ -694,7 +700,7 @@ export async function updateDocumentExtractionAction(
         );
       });
     } else if (
-      document.documentType === "bank_certificate" &&
+      isBankProfitCertificate(document.documentType) &&
       document.filingDraftId
     ) {
       await prisma.$transaction(async (tx) => {
@@ -1046,7 +1052,7 @@ export async function approveAndMapExtractedDocumentAction(documentId: string) {
         "bank_certificate",
         "business_balance_sheet",
         "business_books",
-      ].includes(document.documentType)
+      ].includes(baseFilingDocumentType(document.documentType))
     ) {
       const reviewDraft = await prisma.filingDraft.findFirst({
         where: { id: document.filingDraftId, userId: document.userId },
@@ -1055,7 +1061,7 @@ export async function approveAndMapExtractedDocumentAction(documentId: string) {
       if (!reviewDraft)
         return { success: false, error: "Filing draft not found" };
       const requiredErrors = getDocumentReviewRequiredErrors(
-        document.documentType,
+        baseFilingDocumentType(document.documentType),
         fields,
         reviewDraft.taxYear,
       );
@@ -1319,7 +1325,7 @@ export async function approveAndMapExtractedDocumentAction(documentId: string) {
       };
     }
 
-    if (document.documentType === "bank_certificate") {
+    if (isBankProfitCertificate(document.documentType)) {
       if (!document.filingDraftId) {
         return { success: false, error: "Document is not attached to a filing" };
       }
@@ -1330,7 +1336,7 @@ export async function approveAndMapExtractedDocumentAction(documentId: string) {
               where: {
                 filingDraftId: document.filingDraftId,
                 userId: document.userId,
-                documentType: "bank_certificate",
+                documentType: document.documentType,
               },
               orderBy: [{ createdAt: "desc" }, { id: "desc" }],
             });
@@ -1384,6 +1390,13 @@ export async function approveAndMapExtractedDocumentAction(documentId: string) {
             if (!canonical) {
               throw new Error(
                 "The certificate could not be converted to the canonical bank-profit fields. Review every required value.",
+              );
+            }
+            const slotSubcategory = bankProfitCertificateSubcategory(document.documentType);
+            const certificateSubcategory = bankProfitSubcategoryFromCertificate(canonical);
+            if (slotSubcategory && certificateSubcategory !== slotSubcategory) {
+              throw new Error(
+                `This certificate belongs to ${certificateSubcategory || "an unsupported category"}, not the selected ${slotSubcategory} slot.`,
               );
             }
 

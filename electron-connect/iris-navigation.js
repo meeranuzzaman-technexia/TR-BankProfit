@@ -7,7 +7,7 @@
 // TY2026+ return setup steps that do not require legal/financial judgement.
 // Create/Save/Submit/payment controls and all financial inputs remain off
 // limits until the engine/mapping audit is resolved.
-const BUILD_TAG = "fix61-bank-profit-existing-category-20261023";
+const BUILD_TAG = "fix63-bank-profit-calculate-derived-20261023";
 const BUSINESS_CONTRACT = require("./iris-business-contract.json");
 const DEFAULT_HOSTS = ["iris.fbr.gov.pk"];
 const SECTION_TOUR = Object.freeze([

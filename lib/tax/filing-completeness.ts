@@ -17,6 +17,8 @@ import { isGiftCategory, validateGiftDonorId } from "@/lib/tax/gift-income";
 import { validatePakistaniIban } from "@/lib/tax/iban";
 import type { TaxIncomeSource } from "@/lib/tax/filing-drafts";
 import { validateTaxYearStatement } from "@/lib/tax/tax-year-period";
+import { bankProfitCertificateSlot } from "@/lib/tax/bank-profit-document-slot";
+import type { BankProfitSubcategory } from "@/lib/tax/iris-bank-profit-capture";
 
 const FINAL_TRANSACTION_STATUSES = new Set([
   "APPROVED",
@@ -92,6 +94,10 @@ export async function validateFilingCompleteness(
       taxYear: true,
       incomeSources: true,
       filerType: true,
+      incomeSelections: {
+        where: { source: "bank_profit", status: "SELECTED" },
+        select: { subcategory: true },
+      },
     },
   });
 
@@ -154,6 +160,7 @@ export async function validateFilingCompleteness(
 
   const blockers: string[] = [];
   const incomeSources = parseIncomeSources(draft.incomeSources);
+  const bankProfitSelections = draft.incomeSelections ?? [];
   const requiredDocumentTypes = getRequiredTaxDocumentTypesForCurrentFlow({
     incomeSources,
   });
@@ -163,6 +170,25 @@ export async function validateFilingCompleteness(
   // where Map construction silently let the oldest upload win.
   for (const documentType of requiredDocumentTypes) {
     if (documentType === "bank_statement") continue;
+
+    if (documentType === "bank_certificate" && bankProfitSelections.length > 0) {
+      for (const selection of bankProfitSelections) {
+        const slot = bankProfitCertificateSlot(selection.subcategory as BankProfitSubcategory);
+        const certificate = documents.find((document) =>
+          document.documentType === slot ||
+          (bankProfitSelections.length === 1 && document.documentType === "bank_certificate"),
+        );
+        if (!certificate) {
+          blockers.push(`Upload the required ${selection.subcategory} Bank Profit Certificate`);
+          continue;
+        }
+        for (const error of storedDocumentReviewRequiredErrors("bank_certificate", certificate.extractedData, draft.taxYear))
+          blockers.push(`${selection.subcategory} certificate: ${error}`);
+        if (certificate.extractionStatus !== "MAPPED")
+          blockers.push(`Review and approve/map the ${selection.subcategory} Bank Profit Certificate`);
+      }
+      continue;
+    }
 
     const latestDocument = documents.find(
       (document) => document.documentType === documentType,

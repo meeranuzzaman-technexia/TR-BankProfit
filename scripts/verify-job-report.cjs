@@ -105,6 +105,14 @@ test("completed run: fields say who typed what, employers say who added them", (
   assert.doesNotMatch(out, /HUGE/, "noisy steps are left out");
 });
 
+test("job report records the guarded Bank Profit Calculate action", () => {
+  const out = buildJobReport({
+    executionLog: [{ step: "bank_profit_calculated", detail: "verified" }],
+  }).join("\n");
+  assert.match(out, /Calculate: pressed only to refresh a verified Bank Profit derived Tax Chargeable cell/);
+  assert.match(out, /Save, Submit, Prepare PSID, payment: never pressed/);
+});
+
 test("paused run: says where it stopped and why, including the income-source page", () => {
   const report = buildJobReport({
     finalStatus: "paused",

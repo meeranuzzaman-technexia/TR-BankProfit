@@ -327,6 +327,7 @@ check(
   summaryAction.includes("taxBreakdown"),
   true,
 );
+check("summary carries calculation subcategories for distinguishable Bank Profit lines", summaryAction.includes("subcategory: line.subcategory"), true);
 check(
   "Final tax is totalled separately",
   summaryAction.includes("finalTaxDue"),
@@ -362,6 +363,7 @@ const reviewStep = read("components/tax/filing/wizard-review-step.tsx");
 const wizardConfig = read(
   "components/tax/filing/config/filing-wizard-config.ts",
 );
+check("review labels Bank Profit lines by category", reviewStep.includes("bankProfitCategoryLabel(line.subcategory)"), true);
 
 check(
   "The shared summary type carries the breakdown",

@@ -54,6 +54,10 @@ export function resolveFilingDocumentSlot(
   const requestedType = requestedDocumentType.trim();
   const suppliedAccountId = suppliedBankAccountId?.trim() || null;
 
+  if (requestedType.startsWith("bank_certificate:") && !bankProfitCertificateSubcategory(requestedType)) {
+    return { success: false, error: "Select a supported Bank Profit category" };
+  }
+
   if (requestedType.startsWith(BANK_STATEMENT_SLOT_PREFIX)) {
     const slotAccountId = requestedType
       .slice(BANK_STATEMENT_SLOT_PREFIX.length)
@@ -108,3 +112,4 @@ export function resolveFilingDocumentSlot(
     bankAccountId: null,
   };
 }
+import { bankProfitCertificateSubcategory } from "./bank-profit-document-slot";

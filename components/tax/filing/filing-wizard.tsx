@@ -76,6 +76,8 @@ import {
   type SetupStepKey,
 } from "@/components/tax/filing/wizard-setup-step";
 import type { WizardDocumentSlot } from "@/components/tax/filing/wizard-documents-step";
+import { bankProfitCertificateSlot } from "@/lib/tax/bank-profit-document-slot";
+import { BANK_PROFIT_FINAL_TAX_ROWS, type BankProfitSubcategory } from "@/lib/tax/iris-bank-profit-capture";
 import {
   WizardDocumentsStep,
   type ExtractedPayload,
@@ -740,13 +742,28 @@ export function FilingWizard({
         required: true,
       }));
 
+    const bankProfitSlots = incomeSubcategorySelections
+      .filter((selection) => selection.source === "bank_profit")
+      .map((selection) => {
+        const subcategory = selection.subcategory as BankProfitSubcategory;
+        const target = BANK_PROFIT_FINAL_TAX_ROWS[subcategory];
+        return {
+          documentType: "bank_certificate",
+          slotKey: bankProfitCertificateSlot(subcategory),
+          label: `${target.description} certificate`,
+          reason: `Upload the certificate supporting IRIS row ${target.code}.`,
+          required: true,
+        };
+      });
+
     return [
       ...baseDocumentSlots.filter(
-        (slot) => slot.documentType !== "bank_statement",
+        (slot) => !["bank_statement", "bank_certificate"].includes(slot.documentType),
       ),
       ...bankSlots,
+      ...bankProfitSlots,
     ];
-  }, [baseDocumentSlots, bankAccounts]);
+  }, [baseDocumentSlots, bankAccounts, incomeSubcategorySelections]);
 
   const requiredDocumentTypes = getRequiredTaxDocumentTypesForCurrentFlow({
     incomeSources,

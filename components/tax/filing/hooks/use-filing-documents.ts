@@ -27,6 +27,7 @@ import type {
   ExtractedTransaction,
   FilingDocumentRecord,
 } from "@/components/tax/filing/wizard-documents-step";
+import { isBankProfitCertificate } from "@/lib/tax/bank-profit-document-slot";
 
 type ResetDownstreamSteps = (
   resetStep: number,
@@ -436,7 +437,7 @@ export function useFilingDocuments({
     const record = documentRecords[documentType];
     if (!record) return;
     if (
-      ["pension_statement", "bank_certificate"].includes(documentType) &&
+      (documentType === "pension_statement" || isBankProfitCertificate(documentType)) &&
       record.extractionStatus === "MAPPED"
     ) {
       setDocumentRecords((previous) => ({
@@ -444,7 +445,7 @@ export function useFilingDocuments({
         [documentType]: { ...record, extractionStatus: "COMPLETED" },
       }));
       setProfileSyncNote(
-        documentType === "bank_certificate"
+        isBankProfitCertificate(documentType)
           ? "Unsaved bank-profit certificate changes: Save & Approve Map again before continuing. The prior approved projection is not silently overwritten."
           : "Unsaved pension changes: Save & Approve Map again before continuing. The previously approved source is not silently overwritten.",
       );
@@ -503,7 +504,7 @@ export function useFilingDocuments({
           : current,
       );
       const nextPayload: ExtractedPayload = { ...payload, fields };
-      if (documentType === "bank_certificate") {
+      if (isBankProfitCertificate(documentType)) {
         delete nextPayload.approvedBankProfitCertificate;
       }
       return { ...previous, [record.id]: nextPayload };
@@ -581,7 +582,7 @@ export function useFilingDocuments({
       ...previous,
       [documentType]: { ...record, extractionStatus: "COMPLETED" },
     }));
-    if (documentType === "bank_certificate") {
+    if (isBankProfitCertificate(documentType)) {
       setExtractedByDocumentId((previous) => {
         const payload = previous[record.id];
         if (!payload) return previous;
@@ -590,7 +591,7 @@ export function useFilingDocuments({
         return { ...previous, [record.id]: nextPayload };
       });
     }
-    if (["pension_statement", "bank_certificate"].includes(documentType))
+    if (documentType === "pension_statement" || isBankProfitCertificate(documentType))
       resetDownstreamSteps(step, true);
   }
 
@@ -652,7 +653,7 @@ export function useFilingDocuments({
       return;
     }
 
-    if (documentType === "bank_certificate") {
+    if (isBankProfitCertificate(documentType)) {
       setExtractedByDocumentId((previous) => {
         const payload = previous[record.id];
         if (!payload) return previous;
@@ -661,7 +662,7 @@ export function useFilingDocuments({
         return { ...previous, [record.id]: nextPayload };
       });
     }
-    if (["pension_statement", "bank_certificate"].includes(documentType)) {
+    if (documentType === "pension_statement" || isBankProfitCertificate(documentType)) {
       setDocumentRecords((previous) => ({
         ...previous,
         [documentType]: { ...record, extractionStatus: "COMPLETED" },

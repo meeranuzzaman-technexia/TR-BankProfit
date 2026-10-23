@@ -1,7 +1,7 @@
 // Defense in depth: the server validates source freshness before handing out a
 // pinned context. The desktop repeats the narrow packet contract because it is
 // the last process allowed to type into a live IRIS return.
-const PENSION_GUARD_BUILD_TAG = "fix61-bank-profit-existing-category-20261023";
+const PENSION_GUARD_BUILD_TAG = "fix63-bank-profit-calculate-derived-20261023";
 
 function pensionEntryHold(snapshot) {
   const hasPension =

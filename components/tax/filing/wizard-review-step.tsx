@@ -12,6 +12,7 @@ import { StepHeading } from "@/components/tax/wizard-ui";
 
 type TaxBreakdownLine = {
   source: string;
+  subcategory: string;
   section: string;
   ruleId: string;
   income: number;
@@ -65,6 +66,19 @@ const SOURCE_LABELS: Record<string, string> = {
 
 function sourceLabel(source: string) {
   return SOURCE_LABELS[source] ?? source.replaceAll("_", " ");
+}
+
+const BANK_PROFIT_CATEGORY_LABELS: Record<string, string> = {
+  "bank-or-financial-institution-deposit": "Bank account / deposit",
+  "government-securities-non-individual": "Government securities",
+  "other-profit-on-debt": "Other profit on debt",
+  "sukuk-company": "Sukuk — company",
+  "sukuk-individual-aop-above-1m": "Sukuk — individual/AOP above PKR 1M",
+  "sukuk-individual-aop-below-1m": "Sukuk — individual/AOP up to PKR 1M",
+};
+
+function bankProfitCategoryLabel(subcategory: string) {
+  return BANK_PROFIT_CATEGORY_LABELS[subcategory] ?? subcategory.replaceAll("-", " ");
 }
 
 type WizardReviewStepProps = Readonly<{
@@ -238,6 +252,8 @@ export function WizardReviewStep({
                 const title =
                   line.source === "combined_slab" && parts.length === 1
                     ? sourceLabel(parts[0].route)
+                    : line.source === "bank_profit"
+                      ? `${sourceLabel(line.source)} — ${bankProfitCategoryLabel(line.subcategory)}`
                     : sourceLabel(line.source);
                 return (
                   <li

@@ -171,7 +171,7 @@ function resolveAutofillMode(jobContext) {
 // process appear fully updated (the mixed fix10/fix11 rollout hid this).
 const irisBusinessRowDriver = require("./iris-business-row-driver");
 const irisBankProfitRowDriver = require("./iris-bank-profit-row-driver");
-const AGENT_BUILD_TAG = "fix61-bank-profit-existing-category-20261023";
+const AGENT_BUILD_TAG = "fix63-bank-profit-calculate-derived-20261023";
 function getAgentBuildLabel() {
   return `${AGENT_BUILD_TAG} | navigator: ${irisNavigation.BUILD_TAG} | filler: ${irisRowFiller.BUILD_TAG} | employer: ${irisEmployerDriver.BUILD_TAG} | wealth: ${irisWealthDriver.BUILD_TAG} | bank-profit-row: ${irisBankProfitRowDriver.BUILD_TAG} | pension: ${PENSION_GUARD_BUILD_TAG}`;
 }
@@ -3632,11 +3632,20 @@ async function runLocalIrisNavigationCheck(jobContext, job) {
   const bankProfitFields = packetFields.filter((field) =>
     irisBankProfitRowDriver.BANK_PROFIT_CODES.includes(String(field?.irisCode || "").trim()),
   );
+  const bankProfitDetailsByCode = new Map();
+  for (const field of bankProfitFields) {
+    const code = String(field.irisCode || "").trim();
+    const details = bankProfitDetailsByCode.get(code) || { investments: new Set(), contents: new Set(), missing: false };
+    if (!field.bankProfitInvestment || !field.bankProfitContents) details.missing = true;
+    if (field.bankProfitInvestment) details.investments.add(field.bankProfitInvestment);
+    if (field.bankProfitContents) details.contents.add(field.bankProfitContents);
+    bankProfitDetailsByCode.set(code, details);
+  }
   if (
     bankProfitFields.length &&
-    (bankProfitFields.some((field) => !field.bankProfitInvestment || !field.bankProfitContents) ||
-      new Set(bankProfitFields.map((field) => field.bankProfitInvestment)).size !== 1 ||
-      new Set(bankProfitFields.map((field) => field.bankProfitContents)).size !== 1)
+    Array.from(bankProfitDetailsByCode.values()).some(
+      (details) => details.missing || details.investments.size !== 1 || details.contents.size !== 1,
+    )
   ) {
     const message = "This Bank Profit packet predates the verified category-detail workflow. Generate and approve a fresh packet so its certificate Investment and Contents can be entered. Nothing was changed in FBR.";
     return { paused: true, pauseAction: "portal_state_confirmation", pauseMessage: message,
@@ -4182,6 +4191,7 @@ async function runRealIrisAutofill(jobContext, job, mode) {
   const taxpayerIdentifier = launchState.accountReference || "";
 
   let results = [];
+  let bankProfitCalculated = false;
   const unexpectedPrefill = [];
   // The agent stops at the FIRST figure it cannot enter (live runs). Figures the
   // taxpayer already entered themselves after an earlier stop are skipped, so a
@@ -4329,7 +4339,26 @@ async function runRealIrisAutofill(jobContext, job, mode) {
       "No packet code was seen in the captured section tour, so no section could be targeted. Nothing was filled.",
     );
   }
-  for (const fullGroup of plan.groups) {
+  const executionGroups = plan.groups.flatMap((group) => {
+    if (group.sectionId !== "other_sources_tax_deductions") return [group];
+    const bankProfitCodes = new Set(
+      group.fields
+        .map((field) => String(field.irisCode || "").trim())
+        .filter((code) => irisBankProfitRowDriver.BANK_PROFIT_CODES.includes(code)),
+    );
+    if (bankProfitCodes.size <= 1) return [group];
+    const nonBankProfitFields = group.fields.filter(
+      (field) => !irisBankProfitRowDriver.BANK_PROFIT_CODES.includes(String(field.irisCode || "").trim()),
+    );
+    return [
+      ...Array.from(bankProfitCodes).map((code) => ({
+        ...group,
+        fields: group.fields.filter((field) => String(field.irisCode || "").trim() === code),
+      })),
+      ...(nonBankProfitFields.length ? [{ ...group, fields: nonBankProfitFields }] : []),
+    ];
+  });
+  for (const fullGroup of executionGroups) {
     if (stopped) break;
     const group = fullGroup;
     const isTaxDeductionGroup = [
@@ -4584,6 +4613,45 @@ async function runRealIrisAutofill(jobContext, job, mode) {
           outcome.results = retried.results;
         } else outcome.results[0].sectionStatus = ready.status;
       }
+      if (
+        mode !== "dry" &&
+        isBankProfitFinalTaxGroup &&
+        irisBankProfitRowDriver.SUKUK_CODES.includes(String(field.irisCode || "").trim()) &&
+        field.column === "Tax Chargeable" &&
+        outcome.results.length === 1 &&
+        [irisRowFiller.FILL_STATUS.NO_EDITABLE_CELL, irisRowFiller.FILL_STATUS.COLUMN_DISABLED].includes(
+          outcome.results[0].status,
+        )
+      ) {
+        const calculated = await irisBankProfitRowDriver.calculateBankProfitFinalTax(
+          windowInstance,
+          {
+            mode,
+            code: field.irisCode,
+            expectedChargeable: field.value,
+            beforeStep: () =>
+              ensureNavigationJobActive(
+                job.id,
+                String(taxpayerIdentifier || "").trim().replace(/[ -]/g, ""),
+              ),
+            onStep,
+          },
+        );
+        if (calculated.ok) {
+          bankProfitCalculated ||= calculated.status === "calculated";
+          const retried = await irisRowFiller.fillIrisRows(windowInstance, [field], {
+            dryRun: taken,
+            sectionVerified: true,
+          });
+          outcome.results = retried.results;
+        } else {
+          outcome.results[0].sectionStatus = calculated.status;
+          onStep(
+            "bank_profit_calculate_held",
+            `${field.irisCode} Calculate/recheck was held (${calculated.status}); Save and Submit were not used.`,
+          );
+        }
+      }
       const entries = outcome.results.map((entry) => ({
         ...(taken ? checkTakenOverEntry(entry) : entry),
         sourceGroup: field.sourceGroup,
@@ -4786,7 +4854,7 @@ async function runRealIrisAutofill(jobContext, job, mode) {
   if (mode === "live" && !autofillReviewRequired && job?.type === "tax_assisted_filing") {
     onStep(
       "autofill_handoff_complete",
-      "Approved field entry completed. Review the return in FBR and submit it yourself; no extra TaxRocket confirmation is required. Nothing was saved, calculated, paid or submitted.",
+      `Approved field entry completed. Review the return in FBR and submit it yourself; no extra TaxRocket confirmation is required. Nothing was saved, paid or submitted.${bankProfitCalculated ? " Calculate was used only to refresh and verify Bank Profit Tax Chargeable." : " Calculate was not pressed."}`,
     );
   }
   // What the taxpayer reads is plain language (one line per cause). The raw
@@ -4899,6 +4967,7 @@ async function runRealIrisAutofill(jobContext, job, mode) {
       mode,
       summary,
       results,
+      bankProfitCalculated,
       captures,
       message: fillMessage,
       wealthPrepared: wealthPrepared.map((f) => {

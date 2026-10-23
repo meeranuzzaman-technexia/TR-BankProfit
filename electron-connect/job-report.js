@@ -197,6 +197,9 @@ function buildJobReport(input = {}) {
     : [];
   const autofill = input.result?.autofill || input.result || {};
   const status = String(input.finalStatus || "unknown").toUpperCase();
+  const bankProfitCalculated = executionLog.some(
+    (entry) => String(entry?.step) === "bank_profit_calculated",
+  );
   const lines = [];
   lines.push(
     `RUN ${status} · saved ${input.savedAt || ""} · job ${input.jobId || ""} · build ${input.build || ""}`,
@@ -233,8 +236,10 @@ function buildJobReport(input = {}) {
 
   lines.push(
     "",
-    "NEVER DONE BY THE AGENT",
-    "  Calculate: not pressed by the agent. IRIS has an Auto Calculate switch that recalculates when you change tabs; the agent cannot see whether you pressed Calculate yourself.",
+    "PORTAL ACTIONS",
+    bankProfitCalculated
+      ? "  Calculate: pressed only to refresh a verified Bank Profit derived Tax Chargeable cell; its exact packet value was read back afterward."
+      : "  Calculate: not pressed by the agent. IRIS has an Auto Calculate switch that recalculates when you change tabs; the agent cannot see whether you pressed Calculate yourself.",
     "  Save, Submit, Prepare PSID, payment: never pressed.",
   );
 

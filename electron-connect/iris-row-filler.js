@@ -46,7 +46,7 @@ const DESCRIPTION_SELECTOR = ".row-description-text";
  * a stale copy is a correctness risk, not a cosmetic one — main.js refuses to run
  * the real-portal flow when the three files disagree.
  */
-const BUILD_TAG = "fix61-bank-profit-existing-category-20261023";
+const BUILD_TAG = "fix63-bank-profit-calculate-derived-20261023";
 
 /** Outcome reason codes. `filled` is the only success. */
 const FILL_STATUS = {
@@ -519,7 +519,11 @@ function buildInPageFillScript(fields, options) {
       const existingDigits = (input.value || "").replace(/[\\s,]/g, "");
       if (!isEditable(input)) {
         // A calculated cell is safe only as readback; it must never be written.
-        if (field.irisCode === "923184" && existingDigits === amount.value) {
+        const verifiedDerived =
+          field.irisCode === "923184" ||
+          (["64040052", "64040053", "64040054", "64330054", "64330055", "64330056"].includes(String(field.irisCode)) &&
+            norm(field.column) === "tax chargeable");
+        if (verifiedDerived && existingDigits === amount.value) {
           results.push({
             ...base, status: S.ALREADY_CORRECT, columnIndex: index, matchedBy,
             rowDescription: descOf(row), existingValue: input.value,

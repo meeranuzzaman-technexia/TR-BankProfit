@@ -7,7 +7,7 @@
  * one exact approved profit category, and press only that dialog's ADD or
  * Cancel. It never saves, calculates, submits, or touches payment controls.
  */
-const BUILD_TAG = "fix61-bank-profit-existing-category-20261023";
+const BUILD_TAG = "fix63-bank-profit-calculate-derived-20261023";
 const BANK_PROFIT_TARGETS = Object.freeze({
   "64040052": "Profit on Debt u/s 151(1)(b) from Bank Accounts / Deposits",
   "64040053": "Profit on Debt u/s 151(1)(c) from Government Securities",
@@ -17,6 +17,7 @@ const BANK_PROFIT_TARGETS = Object.freeze({
   "64330054": "Return on Investment in Sukuks u/s 151(1A) @ 10%",
 });
 const BANK_PROFIT_CODES = Object.freeze(Object.keys(BANK_PROFIT_TARGETS));
+const SUKUK_CODES = Object.freeze(["64330054", "64330055", "64330056"]);
 const BANK_PROFIT_CODE = "64040052";
 const BANK_PROFIT_LABEL = BANK_PROFIT_TARGETS[BANK_PROFIT_CODE];
 const GRID_TITLE = "Final Tax";
@@ -32,6 +33,7 @@ const PAGE_CFG = Object.freeze({
   code: BANK_PROFIT_CODE,
   label: BANK_PROFIT_LABEL,
   targets: BANK_PROFIT_TARGETS,
+  directCodes: SUKUK_CODES,
   gridTitle: GRID_TITLE,
   dialogTitle: DIALOG_TITLE,
   investmentDialogTitle: INVESTMENT_DIALOG_TITLE,
@@ -47,6 +49,7 @@ const PAGE_CFG = Object.freeze({
   investmentSelector: 'input[placeholder="Investment"]',
   contentsSelector:
     'textarea[placeholder*="Account, Bond or Certificates"][placeholder*="Current or Savings"][placeholder*="Name of Institution"]',
+  calculateSelector: "app-nitr-wf-body .body.interface_21.active button.calbtn, .body.interface_21.active button.calbtn",
 });
 
 const PAGE_OPS = Object.freeze([
@@ -59,6 +62,7 @@ const PAGE_OPS = Object.freeze([
   "investment_dialog_state",
   "investment_dialog_fill",
   "investment_dialog_click",
+  "calculate",
 ]);
 
 /** Runs inside the IRIS page. Keep this function self-contained for Electron. */
@@ -215,18 +219,24 @@ function bankProfitPageOp(step) {
               ),
             )
           : [];
+        const directSukuk =
+          CFG.directCodes.includes(code) &&
+          inputs.length === CFG.columns.length &&
+          inputs.slice(0, 2).every((input) => !input.disabled && !input.readOnly) &&
+          inputs[2].disabled;
         return expectedLabel &&
           description &&
           norm(description.textContent) === norm(expectedLabel) &&
           codeCell &&
           String(codeCell.textContent || "").trim() === code &&
-          inputs.length === CFG.columns.length &&
-          inputs.every((input) => input.disabled) &&
-          detailRows.length === 1 &&
-          detailDescription &&
-          norm(detailDescription.textContent).startsWith(`${norm(expectedLabel)} -`) &&
-          detailInputs.length === CFG.columns.length &&
-          detailInputs.every((input) => !input.disabled && !input.readOnly)
+          (directSukuk ||
+            (inputs.length === CFG.columns.length &&
+              inputs.every((input) => input.disabled) &&
+              detailRows.length === 1 &&
+              detailDescription &&
+              norm(detailDescription.textContent).startsWith(`${norm(expectedLabel)} -`) &&
+              detailInputs.length === CFG.columns.length &&
+              detailInputs.every((input) => !input.disabled && !input.readOnly)))
           ? expectedLabel
           : null;
       })
@@ -325,6 +335,18 @@ function bankProfitPageOp(step) {
     );
     if (!buttons.length) return { status: "button_not_found" };
     if (buttons.length !== 1) return { status: "button_ambiguous" };
+    if (disabled(buttons[0])) return { status: "button_disabled" };
+    buttons[0].click();
+    return { status: "clicked" };
+  }
+
+  if (step.op === "calculate") {
+    if (dialogs().length) return { status: "dialog_open" };
+    const buttons = Array.from(document.querySelectorAll(CFG.calculateSelector)).filter(
+      (button) => visible(button) && norm(button.textContent) === "calculate",
+    );
+    if (buttons.length !== 1)
+      return { status: buttons.length ? "button_ambiguous" : "button_not_found" };
     if (disabled(buttons[0])) return { status: "button_disabled" };
     buttons[0].click();
     return { status: "clicked" };
@@ -511,6 +533,24 @@ function verifiedParentOnlyRow(snapshot) {
       rows[0].labelMatched &&
       rows[0].cells.length === FINAL_TAX_COLUMNS.length &&
       rows[0].cells.every((cell) => cell.disabled),
+  );
+}
+
+function verifiedDirectSukukRow(snapshot, code) {
+  if (!SUKUK_CODES.includes(String(code)) || !snapshot || snapshot.status !== "ok") return false;
+  const rows = snapshot.rows || [];
+  const cells = rows[0]?.cells || [];
+  return Boolean(
+    snapshot.finalTaxPanelCount === 1 &&
+      snapshot.finalTaxExpanded &&
+      sameLabels(snapshot.columns, FINAL_TAX_COLUMNS) &&
+      rows.length === 1 &&
+      !rows[0].detail &&
+      rows[0].codeMatched &&
+      rows[0].labelMatched &&
+      cells.length === FINAL_TAX_COLUMNS.length &&
+      cells.slice(0, 2).every((cell) => !cell.disabled && !cell.readOnly) &&
+      cells[2].disabled,
   );
 }
 
@@ -734,7 +774,7 @@ async function ensureBankProfitFinalTaxRow(windowInstance, options = {}) {
       "The active Final Tax grid/header did not match the verified three-column layout; no row was added.",
       { cancel: !readOnly && state.dialogs.includes(DIALOG_TITLE) },
     );
-  if (verifiedDetailRow(state)) {
+  if (verifiedDetailRow(state) || verifiedDirectSukukRow(state, target.code)) {
     if (state.dialogs.includes(INVESTMENT_DIALOG_TITLE))
       return fail(
         "unexpected_investment_dialog",
@@ -745,7 +785,7 @@ async function ensureBankProfitFinalTaxRow(windowInstance, options = {}) {
         "chooser_close_failed",
         `The existing ${target.code} row is valid, but its Add Final Tax dialog could not be safely cancelled; filling was held.`,
       );
-    note("row_present", `The existing ${target.code} parent/detail pair and all three writable columns were verified; no ADD was needed.`);
+    note("row_present", `The existing ${target.code} writable row contract was verified; no ADD was needed.`);
     return { ok: true, status: "row_present", added: false, setup };
   }
   const parentOnly = verifiedParentOnlyRow(state);
@@ -883,7 +923,7 @@ async function ensureBankProfitFinalTaxRow(windowInstance, options = {}) {
       { cancel: true },
     );
   }
-  if (verifiedDetailRow(state)) {
+  if (verifiedDetailRow(state) || verifiedDirectSukukRow(state, target.code)) {
     if (!(await closeChooser()))
       return fail(
         "chooser_close_failed",
@@ -962,7 +1002,7 @@ async function ensureBankProfitFinalTaxRow(windowInstance, options = {}) {
     (value) =>
       value.status === "ok" &&
       !value.dialogs.length &&
-      (verifiedParentOnlyRow(value) || verifiedDetailRow(value)),
+      (verifiedParentOnlyRow(value) || verifiedDetailRow(value) || verifiedDirectSukukRow(value, target.code)),
   );
   if (!appeared.ok)
     return fail(
@@ -970,6 +1010,10 @@ async function ensureBankProfitFinalTaxRow(windowInstance, options = {}) {
       `ADD was clicked for the sole checked ${target.label} option, but its verified ${target.code} parent row did not appear. No return Save, Calculate, or Submit was used.`,
       { cancel: true },
     );
+  if (verifiedDirectSukukRow(appeared.value, target.code)) {
+    note("row_added", `Added the verified direct ${target.label} (${target.code}) row. The return was not saved, calculated, or submitted.`);
+    return { ok: true, status: "row_added", added: true, setup };
+  }
   if (!verifiedDetailRow(appeared.value)) return addInvestmentDetail(true);
   note(
     "row_added",
@@ -978,11 +1022,54 @@ async function ensureBankProfitFinalTaxRow(windowInstance, options = {}) {
   return { ok: true, status: "row_added", added: true, setup };
 }
 
+async function calculateBankProfitFinalTax(windowInstance, options = {}) {
+  const {
+    code,
+    mode = "dry",
+    expectedChargeable,
+    beforeStep = async () => {},
+    onStep = () => {},
+    sleep = defaultSleep,
+    timeoutMs = 8000,
+  } = options;
+  const targetCode = String(code || "");
+  const expected = String(expectedChargeable ?? "").replace(/[\s,]/g, "");
+  if (mode !== "live") return { ok: false, status: "calculate_not_live" };
+  if (!SUKUK_CODES.includes(targetCode) || !/^\d+$/.test(expected))
+    return { ok: false, status: "calculate_target_unverified" };
+  const run = async (step) => {
+    await beforeStep();
+    return windowInstance.webContents.executeJavaScript(buildPageScript(step, targetCode));
+  };
+  const initial = await run({ op: "inspect" });
+  if (!verifiedDirectSukukRow(initial, targetCode))
+    return { ok: false, status: "calculate_row_unverified" };
+  const current = String(initial.rows[0].cells[2].value || "").replace(/[\s,]/g, "");
+  if (current === expected) return { ok: true, status: "already_calculated" };
+  if (current) return { ok: false, status: "calculate_existing_mismatch" };
+  const clicked = await run({ op: "calculate" });
+  if (clicked.status !== "clicked")
+    return { ok: false, status: `calculate_${clicked.status}` };
+  const deadline = Date.now() + timeoutMs;
+  let snapshot;
+  do {
+    snapshot = await run({ op: "inspect" });
+    const value = String(snapshot.rows?.[0]?.cells?.[2]?.value || "").replace(/[\s,]/g, "");
+    if (verifiedDirectSukukRow(snapshot, targetCode) && value === expected) {
+      onStep("bank_profit_calculated", `${targetCode} Tax Chargeable was recalculated and verified in IRIS. Save and Submit were not used.`);
+      return { ok: true, status: "calculated" };
+    }
+    await sleep(250);
+  } while (Date.now() < deadline);
+  return { ok: false, status: "calculate_readback_unverified" };
+}
+
 module.exports = {
   BANK_PROFIT_CODE,
   BANK_PROFIT_CODES,
   BANK_PROFIT_LABEL,
   BANK_PROFIT_TARGETS,
+  SUKUK_CODES,
   BUILD_TAG,
   DIALOG_TITLE,
   FINAL_TAX_COLUMNS,
@@ -992,7 +1079,9 @@ module.exports = {
   assertAllowedStep,
   bankProfitPageOp,
   buildPageScript,
+  calculateBankProfitFinalTax,
   ensureBankProfitFinalTaxRow,
   verifiedDetailRow,
+  verifiedDirectSukukRow,
   verifiedParentOnlyRow,
 };

@@ -4466,6 +4466,23 @@ test("fix60: an old Bank Profit packet is refused before the IRIS window opens",
   assert.equal(windowOpened, false);
 });
 
+test("multi-category Bank Profit packets may carry different verified details per IRIS code", async () => {
+  let windowOpened = false;
+  const ctx = sandbox(["runLocalIrisNavigationCheck"], {
+    assertNavigatorBuild: () => {}, AGENT_BUILD_TAG: "test-build",
+    normalizeExplicitResidencyStatus: () => "Resident",
+    ensureWorkerWindow: async () => { windowOpened = true; return {}; },
+    irisNavigation: { buildHandoffSectionIds: () => [] },
+  });
+  const fields = [
+    ...["Taxable Amount", "Tax Deducted", "Tax Chargeable"].map((column) => ({ irisCode: "64040052", column, value: "1", bankProfitInvestment: "Bank deposit", bankProfitContents: "Deposit certificate" })),
+    ...["Taxable Amount", "Tax Deducted", "Tax Chargeable"].map((column) => ({ irisCode: "64040053", column, value: "1", bankProfitInvestment: "Government security", bankProfitContents: "Government certificate" })),
+  ];
+  const out = await ctx.runLocalIrisNavigationCheck({ filingPacket: { taxYear: 2026, snapshot: { filing: { incomeSources: ["bank_profit"], residencyStatus: "Resident" }, portalFieldMap: fields } } }, { id: "multi-bank-profit" });
+  assert.notEqual(out.result?.bankProfitCoverage, "missing_detail_payload");
+  assert.equal(windowOpened, true);
+});
+
 test("pension surcharge adds Computations to the inspected autofill plan", async () => {
   let plan = null;
   const ctx = sandbox(["runLocalIrisNavigationCheck"], {

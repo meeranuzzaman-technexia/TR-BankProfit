@@ -709,6 +709,7 @@ export function buildPortalFieldMap(params: {
   /** Approved document source; authoritative in production. Legacy split is test/backward compatibility only. */
   pensionSource?: PensionSource;
   bankProfitSource?: BankProfitPortalSource;
+  bankProfitSources?: BankProfitPortalSource[];
   pensionDetails?: {
     totalPension: number;
     exemptLimit: number;
@@ -733,6 +734,7 @@ export function buildPortalFieldMap(params: {
     pensionDetails,
     pensionSource,
     bankProfitSource,
+    bankProfitSources = bankProfitSource ? [bankProfitSource] : [],
   } = params;
 
   const incomeFields: PortalFieldMapEntry[] = [];
@@ -880,7 +882,7 @@ export function buildPortalFieldMap(params: {
       ? "GIFT"
       : normalizeCategory(entry.category);
     if (
-      bankProfitSource &&
+      bankProfitSources.length > 0 &&
       entry.entryType === "INCOME" &&
       ["BANK_PROFIT", "PROFIT_ON_DEBT"].includes(normalizedCat)
     ) {
@@ -1055,7 +1057,7 @@ export function buildPortalFieldMap(params: {
     }
   }
 
-  if (bankProfitSource) {
+  for (const bankProfitSource of bankProfitSources) {
     // The reviewed bank-statement gross is the taxable base; the certificate
     // supplies actual withholding and the saved calculation supplies tax due.
     // Each approved category is created through the verified Final Tax selector
@@ -1129,7 +1131,7 @@ export function buildPortalFieldMap(params: {
 
     // Try to map section to IRIS code
     const sectionUpper = credit.section.toUpperCase();
-    if (bankProfitSource && /^151(?:\b|\()/.test(sectionUpper)) continue;
+    if (bankProfitSources.length > 0 && /^151(?:\b|\()/.test(sectionUpper)) continue;
     let irisCode =
       TAX_SECTION_TO_IRIS_CODE[credit.section] ||
       TAX_SECTION_TO_IRIS_CODE[sectionUpper];

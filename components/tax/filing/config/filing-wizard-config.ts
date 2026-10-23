@@ -117,6 +117,7 @@ export const stepLabels: Record<StepKey, string> = {
 /** One income source priced by the most recent tax calculation. */
 export type TaxBreakdownLine = {
   source: string;
+  subcategory: string;
   section: string;
   ruleId: string;
   income: number;

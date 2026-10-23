@@ -28,6 +28,7 @@ const fields = require(path.join(root, "lib/tax/bank-profit-certificate-fields.t
 const review = require(path.join(root, "lib/tax/document-review-required.ts"));
 const iris = require(path.join(root, "lib/tax/iris-bank-profit-capture.ts"));
 const portalFieldMap = require(path.join(root, "lib/tax/portal-field-map.ts"));
+const documentSlots = require(path.join(root, "lib/tax/bank-profit-document-slot.ts"));
 
 const L = fields.BANK_PROFIT_CERTIFICATE_LABELS;
 const fixtureValues = {
@@ -298,11 +299,37 @@ test("approval, edit invalidation, UI, and filing-completeness gates are wired",
   assert.match(gate, /"bank_certificate"/);
   assert.match(gate, /Bank Profit Certificate: \$\{error\}/);
   assert.match(packet, /source: "bank_profit"/);
-  assert.match(packet, /statementGrossProfit: toMoneyNumber|const statementGrossProfit = toMoneyNumber/);
+  assert.match(packet, /statementGrossProfit: gross/);
   assert.match(packet, /taxDeducted: approved\.taxDeducted/);
-  assert.match(packet, /taxChargeable: toMoneyNumber\(calculationLine\.calculatedTax\)/);
+  assert.match(packet, /taxChargeable: toMoneyNumber\(line\.calculatedTax\)/);
   assert.match(packet, /investment,/);
   assert.match(packet, /approved\.iban \|\| approved\.accountNumber/);
   assert.match(packet, /approved\.bankName\.trim\(\)/);
-  assert.match(packet, /bankProfitSource,/);
+  assert.match(packet, /bankProfitSources,/);
+  const desktop = fs.readFileSync(path.join(root, "electron-connect/main.js"), "utf8");
+  assert.match(desktop, /const executionGroups = plan\.groups\.flatMap/);
+  assert.match(desktop, /Array\.from\(bankProfitCodes\)\.map/);
+});
+
+test("multiple Bank Profit categories keep separate certificate slots and IRIS rows", () => {
+  const deposit = "bank-or-financial-institution-deposit";
+  const government = "government-securities-non-individual";
+  assert.equal(documentSlots.bankProfitCertificateSlot(deposit), `bank_certificate:${deposit}`);
+  assert.equal(documentSlots.bankProfitCertificateSlot(government), `bank_certificate:${government}`);
+  assert.equal(documentSlots.bankProfitCertificateSubcategory(`bank_certificate:${government}`), government);
+  assert.equal(documentSlots.bankProfitCertificateSubcategory("bank_certificate:not-a-rule"), null);
+
+  const map = portalFieldMap.buildPortalFieldMap({
+    taxYear: 2026,
+    filerType: "myself",
+    taxpayerListStatus: "ATL",
+    ledgerEntries: [{ id: "ledger", entryType: "INCOME", category: "BANK_PROFIT", description: "Combined", amount: 1700000 }],
+    bankProfitSources: [
+      { documentId: "deposit", subcategory: deposit, investment: "Deposit", contents: "Deposit evidence", statementGrossProfit: 450000, taxDeducted: 90000, taxChargeable: 90000 },
+      { documentId: "government", subcategory: government, investment: "Government security", contents: "Security evidence", statementGrossProfit: 1250000, taxDeducted: 250000, taxChargeable: 250000 },
+    ],
+  });
+  const mapped = portalFieldMap.flattenPortalFieldMap(map).filter((field) => ["64040052", "64040053"].includes(field.irisCode));
+  assert.equal(mapped.length, 6);
+  assert.deepEqual(new Set(mapped.map((field) => field.irisCode)), new Set(["64040052", "64040053"]));
 });

@@ -217,14 +217,24 @@ test("live: an existing verified row is reused without opening the chooser", asy
   assert.equal(h.fake.clicks.length, 0);
 });
 
-test("live: every supported profit category selects only its exact popup option and creates its own coded child row", async () => {
+test("live: every supported profit category selects its exact option and accepts its captured row shape", async () => {
   for (const [code, label] of Object.entries(TARGETS)) {
     const h = harness({ fakeOptions: { targetCode: code, targetLabel: label } });
     const out = await h.run();
     assert.equal(out.ok, true, `${code}: ${JSON.stringify(out)}`);
-    assert.equal(h.fake.rows().length, 2, code);
+    const directSukuk = code.startsWith("6433");
+    assert.equal(h.fake.rows().length, directSukuk ? 1 : 2, code);
     assert.ok(h.fake.rows().every((row) => row.id === code), code);
-    assert.match(h.fake.rows()[1].textContent, new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.match(h.fake.rows().at(-1).textContent, new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    if (directSukuk) {
+      const inputs = [...h.fake.rows()[0].querySelectorAll("input")];
+      assert.deepEqual(inputs.map((input) => input.disabled), [false, false, true], code);
+      assert.equal(
+        h.fake.clicks.some((click) => click.id === "add-adjustable-tax-generic"),
+        false,
+        `${code}: direct Sukuk rows must not open the Investment dialog`,
+      );
+    }
     assert.equal(
       h.fake.clicks.filter((click) => click.inDialog && click.tag === "INPUT").length,
       0,
@@ -252,6 +262,45 @@ test("live: an already-selected supported category with a verified existing row 
     h.fake.clicks.some((click) => click.inDialog && click.text === "Cancel"),
     false,
   );
+});
+
+test("live: an already-selected direct Sukuk row does not block adding another Sukuk category", async () => {
+  const existing = { code: "64330055", label: TARGETS["64330055"] };
+  const h = harness({
+    fakeOptions: {
+      targetCode: "64330056",
+      targetLabel: TARGETS["64330056"],
+      targetChecked: false,
+      extraChecked: [existing.label],
+      existingSources: [existing],
+    },
+  });
+  const out = await h.run();
+  assert.equal(out.ok, true, JSON.stringify(out));
+  assert.equal(out.status, "row_added");
+  assert.equal(h.fake.rows().length, 1);
+});
+
+test("live: Calculate populates and verifies only the direct Sukuk derived Tax Chargeable cell", async () => {
+  const fake = new FakeIrisBankProfit({
+    targetCode: "64330056",
+    targetLabel: TARGETS["64330056"],
+  });
+  fake.addDirectSukukRow();
+  const inputs = fake.rows()[0].querySelectorAll("input");
+  inputs[0].value = "2000000";
+  inputs[1].value = "500000";
+  const out = await driver.calculateBankProfitFinalTax(fake, {
+    mode: "live",
+    code: "64330056",
+    expectedChargeable: "500000",
+    sleep: async () => {},
+    timeoutMs: 50,
+  });
+  assert.equal(out.ok, true, JSON.stringify(out));
+  assert.equal(inputs[2].value, "500000");
+  assert.equal(fake.clicks.filter((click) => click.text === "Calculate").length, 1);
+  assert.equal(fake.clicks.some((click) => /save|submit|payment/i.test(click.text)), false);
 });
 
 test("live: resumes the already-open Investment popup shown by IRIS", async () => {
@@ -475,6 +524,7 @@ test("desktop build packages the narrow Bank Profit row driver and wires it befo
   assert.ok(agentPackage.build.files.includes("iris-bank-profit-row-driver.js"));
   const main = fs.readFileSync(path.join(ROOT, "electron-connect/main.js"), "utf8");
   assert.match(main, /irisBankProfitRowDriver\.ensureBankProfitFinalTaxRow/);
+  assert.match(main, /irisBankProfitRowDriver\.calculateBankProfitFinalTax/);
   assert.match(main, /isBankProfitFinalTaxGroup\s*\?\s*\[\]\s*:/);
   assert.match(main, /const addIfMissing = group\.fields\.some/);
   assert.match(main, /takenKeys\.has\(autofillItemKey\(field\)\)/);

@@ -51,6 +51,11 @@ class FakeIrisBankProfit {
     this.window = this.dom.window;
     this.document = this.window.document;
     this.container = this.document.querySelector("main.iris-data");
+    this.container.classList.add("body", "interface_21", "active");
+    const calculate = this.document.createElement("button");
+    calculate.className = "btn calbtn";
+    calculate.textContent = "Calculate";
+    this.container.appendChild(calculate);
     const page = new JSDOM(read("final-tax-row-missing.html")).window.document;
     for (const child of [...page.body.childNodes])
       this.container.appendChild(this.document.importNode(child, true));
@@ -154,6 +159,17 @@ class FakeIrisBankProfit {
     this.insertAfter(parent, anchor || body.firstElementChild || body);
   }
 
+  addDirectSukukRow() {
+    const body = this.rowBody();
+    const anchor = body?.querySelector('.dataRow[id="999919"]') || body?.querySelector(".dataRow");
+    if (!body || this.rows().length) return;
+    const row = this.makeRow(true);
+    row.classList.remove("section-detail-child-row");
+    row.querySelector(".row-description-text").textContent = this.label;
+    row.querySelectorAll("input")[2].disabled = true;
+    this.insertAfter(row, anchor || body.firstElementChild || body);
+  }
+
   addDetailRow(investment = "existing investment", contents = "existing contents") {
     const parent = this.rows().find((row) => !row.classList.contains("section-detail-child-row"));
     if (!parent || this.rows().some((row) => row.classList.contains("section-detail-child-row"))) return;
@@ -166,6 +182,14 @@ class FakeIrisBankProfit {
     if (code !== this.code) {
       const body = this.rowBody();
       const anchor = body?.querySelector('.dataRow[id="999919"]') || body?.querySelector(".dataRow");
+      if (["64330054", "64330055", "64330056"].includes(code)) {
+        const row = this.makeRow(true, code, label);
+        row.classList.remove("section-detail-child-row");
+        row.querySelector(".row-description-text").textContent = label;
+        row.querySelectorAll("input")[2].disabled = true;
+        this.insertAfter(row, anchor || body.firstElementChild || body);
+        return;
+      }
       const parent = this.makeRow(false, code, label);
       this.insertAfter(parent, anchor || body.firstElementChild || body);
       if (includeDetail) {
@@ -299,6 +323,13 @@ class FakeIrisBankProfit {
       this.openDialog();
       return;
     }
+    if (!dialog && button?.classList.contains("calbtn")) {
+      for (const row of this.container.querySelectorAll('.dataRow[id^="6433"]')) {
+        const inputs = row.querySelectorAll("input");
+        if (inputs.length === 3 && inputs[2].disabled) inputs[2].value = inputs[1].value;
+      }
+      return;
+    }
     if (!dialog && element.closest && element.closest('#add-adjustable-tax-generic[title="Add"]')) {
       this.openInvestmentDialog();
       return;
@@ -322,7 +353,8 @@ class FakeIrisBankProfit {
         return Boolean(input && input.checked && !input.disabled);
       });
       if (selected.some((card) => card.querySelector("p")?.textContent.trim() === this.label)) {
-        this.addParentRow();
+        if (["64330054", "64330055", "64330056"].includes(this.code)) this.addDirectSukukRow();
+        else this.addParentRow();
         dialog.remove();
       }
     }

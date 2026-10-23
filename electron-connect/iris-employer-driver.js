@@ -37,7 +37,7 @@
  *   - Dry mode never clicks inside the page; it only reads and reports.
  */
 
-const BUILD_TAG = "fix61-bank-profit-existing-category-20261023";
+const BUILD_TAG = "fix63-bank-profit-calculate-derived-20261023";
 
 const EMPLOYER_STATUS = Object.freeze({
   ALREADY_LISTED: "already_listed",

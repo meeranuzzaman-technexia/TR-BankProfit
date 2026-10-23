@@ -208,7 +208,6 @@ export async function uploadFilingDocumentAction(formData: FormData) {
       "rent_agreement",
       "dividend_certificate",
     ].includes(documentType);
-
     if (isCsvLike && !isBankSlot) {
       return {
         success: false,

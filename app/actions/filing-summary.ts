@@ -77,6 +77,7 @@ export async function getFilingSummaryAction(draftId: string) {
           orderBy: { createdAt: "asc" },
           select: {
             source: true,
+            subcategory: true,
             section: true,
             ruleId: true,
             taxBase: true,
@@ -104,6 +105,7 @@ export async function getFilingSummaryAction(draftId: string) {
 
       return {
         source: line.source,
+        subcategory: line.subcategory,
         section: line.section,
         ruleId: line.ruleId,
         income: Number(line.taxBase),

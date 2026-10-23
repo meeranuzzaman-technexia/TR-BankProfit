@@ -50,6 +50,9 @@ import { sumMoney, toMoneyAmount } from "@/lib/money";
 import { resolveApprovedPensionSource, type PensionSource } from "@/lib/tax/pension-source";
 import { cancelActivePensionJobs } from "@/lib/tax/pension-invalidation";
 import { pensionProfileErrors, readPensionStatementFacts } from "@/lib/tax/pension-statement-fields";
+import { readApprovedBankProfitCertificate } from "@/lib/tax/bank-profit-certificate-fields";
+import { bankProfitSubcategoryFromCertificate } from "@/lib/tax/iris-bank-profit-capture";
+import { bankProfitCertificateSubcategory, isBankProfitCertificate } from "@/lib/tax/bank-profit-document-slot";
 
 async function getOwnedDraft(draftId: string) {
   const session = await getServerSession(authOptions);
@@ -447,6 +450,49 @@ export async function calculateTaxAction(
     const isMyselfBusiness =
       draft.filerType !== "my_business" && incomeSources.includes("business");
 
+    const selectedBankProfitCategories = Array.from(
+      selectedSubcategories.get("bank_profit") ?? new Set<string>(),
+    );
+    const bankProfitCertificateSources: TaxIncomeSource[] = [];
+    if (selectedBankProfitCategories.length > 1) {
+      const certificates = await prisma.document.findMany({
+        where: {
+          filingDraftId: draft.id,
+          userId: draft.userId,
+          extractionStatus: "MAPPED",
+          documentType: { startsWith: "bank_certificate" },
+        },
+        select: { documentType: true, extractedData: true },
+      });
+      for (const document of certificates) {
+        if (!isBankProfitCertificate(document.documentType)) continue;
+        try {
+          const payload = JSON.parse(document.extractedData || "{}");
+          const approved = readApprovedBankProfitCertificate(payload.fields, draft.taxYear);
+          const subcategory = approved && bankProfitSubcategoryFromCertificate(approved);
+          if (subcategory && bankProfitCertificateSubcategory(document.documentType) !== subcategory) continue;
+          if (subcategory && selectedBankProfitCategories.includes(subcategory)) {
+            bankProfitCertificateSources.push({
+              route: "bank_profit",
+              income: approved.grossAnnualProfit,
+              subcategory,
+            });
+          }
+        } catch {
+          // The document gate reports incomplete evidence; never invent a split.
+        }
+      }
+      const represented = new Set(bankProfitCertificateSources.map((source) => source.subcategory));
+      const certificateGross = sumMoney(bankProfitCertificateSources.map((source) => source.income));
+      if (
+        represented.size !== selectedBankProfitCategories.length ||
+        bankProfitCertificateSources.length !== selectedBankProfitCategories.length ||
+        Number(certificateGross.toString()) !== Number(bankProfitIncome.toString())
+      ) {
+        flatRoutesNeedingSplit.push("bank_profit");
+      }
+    }
+
     for (const entry of flatRouteInputs) {
       if (!incomeSources.includes(entry.source)) continue;
       if (entry.source === "business" && isMyselfBusiness) continue;
@@ -455,6 +501,14 @@ export async function calculateTaxAction(
         selectedSubcategories.get(entry.source) ?? new Set<string>(),
       );
       if (selected.length === 0) continue;
+
+      if (entry.source === "bank_profit" && selected.length > 1) {
+        if (!flatRoutesNeedingSplit.includes("bank_profit")) {
+          flatRouteSources.push(...bankProfitCertificateSources);
+          routedFlatSourceNames.add(entry.source);
+        }
+        continue;
+      }
 
       if (selected.length > 1) {
         flatRoutesNeedingSplit.push(entry.source);
