@@ -29,7 +29,7 @@ const path = require("path");
  * shipped code, never invented; `--self-test` proves that against this tree, so a renamed
  * function has to be updated here in the same commit or this check cries wolf.
  */
-const SYNC_STAMP = "gift-7037-20261005";
+const SYNC_STAMP = "fix60-bank-profit-category-routing-20261023";
 const MARKERS = [
   [
     "lib/tax/portal-field-map.ts",
@@ -115,12 +115,13 @@ const MARKERS = [
       "NEVER DONE BY THE AGENT",
       "buildAttentionMessage",
       "buildAttentionReport",
+      "Other Final Tax sources were selected",
     ],
     "the plain-language job report",
   ],
   [
     "electron-connect/iris-employer-driver.js",
-    ["runEmployerDriver", "fix52-computed-surcharge-readback-20261020"],
+    ["runEmployerDriver", "fix60-bank-profit-category-routing-20261023"],
     "the employer driver (exact registered name only)",
   ],
   [
@@ -139,8 +140,10 @@ const MARKERS = [
   [
     "electron-connect/main.js",
     [
-      "fix52-computed-surcharge-readback-20261020",
+      "fix60-bank-profit-category-routing-20261023",
       "collectAcknowledgedAutofillItems",
+      "irisBankProfitRowDriver.ensureBankProfitFinalTaxRow",
+      "isBankProfitFinalTaxGroup",
       "real_autofill_stopped",
       "checkTakenOverEntry",
       "runWealthDriverStepwise",
@@ -150,13 +153,37 @@ const MARKERS = [
     "build stamp plus a truthful live-entry completion result",
   ],
   [
+    "electron-connect/renderer.html",
+    ["authenticated dashboard may open the exact form/year draft"],
+    "the desktop explains authenticated draft opening and strict header verification",
+  ],
+  [
+    "electron-connect/iris-bank-profit-row-driver.js",
+    [
+      "fix60-bank-profit-category-routing-20261023",
+      "ensureBankProfitFinalTaxRow",
+      "Add Final Tax",
+      "64040052",
+    ],
+    "the exact Final Tax source-add flow for Bank Profit only",
+  ],
+  [
+    "electron-connect/iris-business-row-driver.js",
+    ["fix60-bank-profit-category-routing-20261023"],
+    "the business row driver build stamp",
+  ],
+  [
     "electron-connect/iris-navigation.js",
-    ["salaryVerified", "This inspection did not enter values"],
+    [
+      "fix60-bank-profit-category-routing-20261023",
+      "salaryVerified",
+      "This inspection did not enter values",
+    ],
     "the section gate and honest separation between inspection and entry",
   ],
   [
     "electron-connect/iris-row-filler.js",
-    ["readback_mismatch"],
+    ["fix60-bank-profit-category-routing-20261023", "readback_mismatch"],
     "every write is re-read before it counts",
   ],
   [
@@ -166,8 +193,17 @@ const MARKERS = [
   ],
   [
     "electron-connect/iris-wealth-driver.js",
-    ["planCashTarget", "add_to_iris_value"],
+    [
+      "fix60-bank-profit-category-routing-20261023",
+      "planCashTarget",
+      "add_to_iris_value",
+    ],
     "Cash in hand (7012): baseline plus movement, never a bare overwrite",
+  ],
+  [
+    "electron-connect/pension-guard.js",
+    ["fix60-bank-profit-category-routing-20261023"],
+    "the pension packet safety guard build stamp",
   ],
   [
     "electron-connect/iris-wealth-driver.js",
@@ -267,6 +303,16 @@ const MARKERS = [
     "fixture read by the employer driver tests",
   ],
   [
+    "test-fixtures/iris/other-sources/final-tax-row-missing.html",
+    ["64040052 is intentionally absent", "Tax Chargeable"],
+    "sanitized Final Tax grid capture with the Bank Profit row absent",
+  ],
+  [
+    "test-fixtures/iris/other-sources/modal-add-final-tax.html",
+    ["Add Final Tax", "Profit on Debt u/s 151(1)(b) from Bank Accounts / Deposits"],
+    "sanitized captured dialog with only the verified Bank Profit option selected",
+  ],
+  [
     "scripts/lib/fake-iris-employer.cjs",
     ["class FakeIrisEmployer"],
     "the fake IRIS employer page the driver tests run against",
@@ -305,6 +351,16 @@ const MARKERS = [
     "scripts/verify-iris-wealth-driver.cjs",
     ["gift planning:"],
     "the 7037 Gift driver tests",
+  ],
+  [
+    "scripts/verify-iris-bank-profit-row-driver.cjs",
+    ["capture contract: Final Tax chooser", "only Final Tax"],
+    "the captured Bank Profit row-add workflow and no-unrelated-source safety tests",
+  ],
+  [
+    "scripts/lib/fake-iris-bank-profit.cjs",
+    ["class FakeIrisBankProfit", "ADD"],
+    "the isolated Bank Profit Final Tax chooser test double",
   ],
   [
     "scripts/verify-bank-classification.cjs",

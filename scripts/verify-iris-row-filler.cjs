@@ -280,7 +280,7 @@ test("tax deductions: 64020007 Final Tax has two writable cells followed by deri
 
 test("pension surcharge: 923184 receives ten percent of the calculated pension tax", () => {
   const { byKey } = runFill("computations.html", [
-    field("pension.surcharge", "923184", "Total Amount", 10000),
+    field("pension.surcharge", "923184", "Total Income", 10000),
   ]);
   assert.equal(byKey["pension.surcharge"].status, filler.FILL_STATUS.FILLED);
   assert.equal(byKey["pension.surcharge"].columnIndex, 0);
@@ -300,7 +300,7 @@ test("pension surcharge: an IRIS-calculated disabled 923184 is accepted only whe
     input.value = existing;
     input.disabled = true;
     const prepared = [
-      filler.prepareField(field("pension.surcharge", "923184", "Total Amount", 10000)),
+      filler.prepareField(field("pension.surcharge", "923184", "Total Income", 10000)),
     ];
     const [result] = dom.window.eval(filler.buildInPageFillScript(prepared, {}));
     assert.equal(result.status, expected, JSON.stringify(result));

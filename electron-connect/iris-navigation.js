@@ -7,7 +7,7 @@
 // TY2026+ return setup steps that do not require legal/financial judgement.
 // Create/Save/Submit/payment controls and all financial inputs remain off
 // limits until the engine/mapping audit is resolved.
-const BUILD_TAG = "fix52-computed-surcharge-readback-20261020";
+const BUILD_TAG = "fix60-bank-profit-category-routing-20261023";
 const BUSINESS_CONTRACT = require("./iris-business-contract.json");
 const DEFAULT_HOSTS = ["iris.fbr.gov.pk"];
 const SECTION_TOUR = Object.freeze([
@@ -84,16 +84,64 @@ const WEALTH_SECTION_IDS = Object.freeze([
 const INCOME_SECTION_IDS = Object.freeze(
   ALL_SECTION_IDS.filter((id) => !WEALTH_SECTION_IDS.includes(id)),
 );
-// Current Electron handoff scope is Salary plus the Salary withholding grid.
-// Tax Deductions is explicitly enabled for this supervised test so code 64020004
-// can be placed; Property, Wealth, Payments, Computations, and other unsupported
-// routes remain excluded.
+// Salary/pension packets use the Salary and salary-withholding views. A
+// certificate-backed Bank Profit packet starts in Other Sources instead; it
+// must not inherit Salary merely because the return is non-business.
 const SALARY_ONLY_SECTION_IDS = Object.freeze(["salary"]);
 const SALARY_WITHHOLDING_SECTION_IDS = Object.freeze([
   "salary",
   "tax_deductions",
 ]);
 const BANK_PROFIT_SECTION_IDS = Object.freeze(["other_sources_tax_deductions"]);
+
+/**
+ * Build the exact portal tour from approved packet scope. Salary is requested
+ * only when Salary or Pension is an explicitly selected income source; the
+ * previous non-business default made Bank Profit-only returns hunt for Salary.
+ */
+function buildHandoffSectionIds({
+  incomeSources,
+  businessSections = [],
+  bankProfitRequested = false,
+  computationsRequested = false,
+} = {}) {
+  const sources = new Set(
+    (Array.isArray(incomeSources) ? incomeSources : [])
+      .map((source) => normalizeSetupLabel(source))
+      .filter(Boolean),
+  );
+  const salaryRequested = sources.has("salary") || sources.has("pension");
+  const sections = [
+    ...(salaryRequested ? SALARY_WITHHOLDING_SECTION_IDS : []),
+    ...(Array.isArray(businessSections) ? businessSections : []),
+    ...(bankProfitRequested ? BANK_PROFIT_SECTION_IDS : []),
+    ...(computationsRequested ? ["computations"] : []),
+  ];
+  return [...new Set(sections)];
+}
+
+function isSupportedSectionTourPlan(tourPlan) {
+  if (!Array.isArray(tourPlan) || !tourPlan.length || tourPlan.some((section) => !section))
+    return false;
+  const first = tourPlan[0];
+  const supportedStart =
+    first.id === "salary" ||
+    first.id === "other_sources_tax_deductions" ||
+    Object.hasOwn(BUSINESS_CONTRACT, first.id);
+  return (
+    supportedStart &&
+    new Set(tourPlan.map((section) => section.id)).size === tourPlan.length
+  );
+}
+
+function shouldStartSectionTourAtZero(tourPlan) {
+  const first = Array.isArray(tourPlan) ? tourPlan[0] : null;
+  return Boolean(
+    first &&
+      (first.id === "other_sources_tax_deductions" ||
+        Object.hasOwn(BUSINESS_CONTRACT, first.id)),
+  );
+}
 
 /**
  * Sections that must render data rows when the return is open. Payment and
@@ -224,6 +272,21 @@ function isManualNewReturnStage(stage) {
 // Pure functions over already-captured metadata: they read no live DOM and make
 // no navigation decision of their own.
 
+// A single code has a separately verified row-add route when the tour cannot
+// see it because no detail row exists yet. The driver re-verifies this exact
+// section/grid and the writable detail-row contract after the targeted ADD.
+const VERIFIED_ABSENT_CODE_ROUTES = Object.freeze({
+  "64040052": Object.freeze({
+    sectionId: "other_sources_tax_deductions",
+    gridTitle: "Final Tax",
+  }),
+  "64040053": Object.freeze({ sectionId: "other_sources_tax_deductions", gridTitle: "Final Tax" }),
+  "64040054": Object.freeze({ sectionId: "other_sources_tax_deductions", gridTitle: "Final Tax" }),
+  "64330054": Object.freeze({ sectionId: "other_sources_tax_deductions", gridTitle: "Final Tax" }),
+  "64330055": Object.freeze({ sectionId: "other_sources_tax_deductions", gridTitle: "Final Tax" }),
+  "64330056": Object.freeze({ sectionId: "other_sources_tax_deductions", gridTitle: "Final Tax" }),
+});
+
 /** Map every IRIS code observed during the tour to the section that showed it. */
 function buildSectionCodeIndex(sectionTour) {
   const index = new Map();
@@ -256,18 +319,28 @@ function planSectionFills(fields, sectionTour) {
     const optionalSection = field?.sourceGroup === "businessFields" && field?.leftPanel === "Business"
       ? (sectionTour?.sections || []).find(section => section.mappingVerified && BUSINESS_CONTRACT[section.id]?.tab === field.leftSection && BUSINESS_CONTRACT[section.id]?.rows[code]?.optional)
       : null;
-    const sectionId = (code ? index.get(code) : null) || optionalSection?.id;
+    const verifiedAbsentRoute = code ? VERIFIED_ABSENT_CODE_ROUTES[code] : null;
+    const sectionId =
+      verifiedAbsentRoute?.sectionId ||
+      (code ? index.get(code) : null) ||
+      optionalSection?.id;
     if (!sectionId) {
       unlocated.push(field);
       continue;
     }
     const section = (sectionTour?.sections || []).find((entry) => entry?.id === sectionId);
-    const gridTitle = section?.rows?.find((row) => String(row?.code || "").trim() === code)?.gridTitle || null;
+    const observedRow = section?.rows?.find(
+      (row) => String(row?.code || "").trim() === code,
+    );
+    const gridTitle = verifiedAbsentRoute?.gridTitle || observedRow?.gridTitle || null;
     const groupKey = `${sectionId}\u0000${gridTitle || ""}`;
     if (!bySection.has(groupKey)) bySection.set(groupKey, { sectionId, gridTitle, fields: [] });
     bySection.get(groupKey).fields.push(field);
   }
-  const groups = order.flatMap((id) =>
+  const explicitOrder = Array.from(bySection.values())
+    .map((group) => group.sectionId)
+    .filter((id, index, values) => !order.includes(id) && values.indexOf(id) === index);
+  const groups = [...order, ...explicitOrder].flatMap((id) =>
     Array.from(bySection.values()).filter((group) => group.sectionId === id),
   );
   return { groups, unlocated };
@@ -1209,14 +1282,35 @@ function portalProbe(options = {}) {
         /(?<!\d)(?:\d{5}-\d{7}-\d|\d{7}-\d|\d{13}|\d{8}|\d{7})(?!\d)/g,
       ) || []
     ).map((value) => value.replace(/-/g, ""));
-  const identityStatus = (t) => {
+  const identityStatusFromIdentifiers = (values) => {
     if (!identityConfigured) return "not_configured";
-    const ids = Array.from(new Set(identifiersIn(t)));
+    const ids = Array.from(new Set(values));
     return ids.length === 0
       ? "unknown"
       : ids.length === 1 && ids[0] === expectedIdentifier
         ? "match"
         : "mismatch";
+  };
+  const identityStatus = (t) =>
+    identityStatusFromIdentifiers(identifiersIn(t));
+  // Dashboard rows can contain document/reference numbers unrelated to the
+  // taxpayer. An explicit Registration No/Number still wins; when the signed-in
+  // dashboard omits it, authentication authorizes opening the exact
+  // form/year/period draft and the opened return header performs the strict
+  // taxpayer comparison before any section navigation or financial entry.
+  const registrationIdentifiersIn = (t) => {
+    const value = normalize(t);
+    const labelPattern = /\bregistration\s*(?:no\.?|number)\s*[:#]?\s*/gi;
+    const ids = [];
+    let label;
+    while ((label = labelPattern.exec(value))) {
+      const tail = value.slice(labelPattern.lastIndex);
+      const identifier = tail.match(
+        /^(?:\d{5}-\d{7}-\d|\d{7}-\d|\d{13}|\d{8}|\d{7})(?![\d-])/,
+      );
+      if (identifier) ids.push(identifier[0].replace(/-/g, ""));
+    }
+    return Array.from(new Set(ids));
   };
   const isOriginalFullYear = (t) =>
     /114\s*\(\s*1\s*\)/i.test(t) &&
@@ -1249,6 +1343,12 @@ function portalProbe(options = {}) {
   };
   const rowFacts = (row) => {
     const t = text(row);
+    const registrationIdentifiers = registrationIdentifiersIn(t);
+    const dashboardIdentityStatus = registrationIdentifiers.length
+      ? identityStatusFromIdentifiers(registrationIdentifiers)
+      : identityConfigured && authenticated
+        ? "match"
+        : identityStatusFromIdentifiers([]);
     const yearMatch = t.match(/tax\s*year\s*:?\s*(20\d{2})/i);
     const dateStrings =
       t.match(
@@ -1270,7 +1370,12 @@ function portalProbe(options = {}) {
       periodStart: start,
       periodEnd: end,
       periodMatch,
-      identityStatus: identityStatus(t),
+      identityStatus: dashboardIdentityStatus,
+      identityEvidence: registrationIdentifiers.length
+        ? "explicit_registration_value"
+        : dashboardIdentityStatus === "match"
+          ? "authenticated_session"
+          : "no_explicit_registration_value",
     };
   };
   const dashboardRows = Array.from(
@@ -2369,14 +2474,22 @@ function portalProbe(options = {}) {
     ) &&
     unboundRows === 0;
 
+  const bankProfitCodes = [
+    "64040052", "64040053", "64040054", "64330054", "64330055", "64330056",
+  ];
   const bankProfitFinalRows = metadataRows.filter(
-    (row) => row.code === "64040052" && row.gridTitle === "Final Tax",
+    (row) => bankProfitCodes.includes(row.code) && row.gridTitle === "Final Tax",
   );
   const bankProfitParent = bankProfitFinalRows.filter((row) =>
     row.cells.every((cell) => cell.disabled === true),
   );
   const bankProfitChild = bankProfitFinalRows.filter((row) =>
     row.cells.length === 3 && row.cells.every((cell) => cell.disabled === false && !cell.readOnly),
+  );
+  const bankProfitPairPresent = bankProfitCodes.some(
+    (code) =>
+      bankProfitParent.some((row) => row.code === code) &&
+      bankProfitChild.some((row) => row.code === code),
   );
   const otherSourcesTaxDeductionsVerified =
     currentSectionId === "other_sources_tax_deductions" &&
@@ -2386,8 +2499,7 @@ function portalProbe(options = {}) {
         JSON.stringify(grid.columns) ===
           JSON.stringify(["Taxable Amount", "Tax Deducted", "Tax Chargeable"]),
     ) &&
-    bankProfitParent.length === 1 &&
-    bankProfitChild.length === 1 &&
+    bankProfitPairPresent &&
     bankProfitFinalRows.every((row) => row.headerMatched === true) &&
     unboundRows === 0;
 
@@ -2715,7 +2827,7 @@ function portalProbe(options = {}) {
     },
     otherSourcesTaxDeductions: {
       verified: otherSourcesTaxDeductionsVerified,
-      expectedRowCodes: ["64040052"],
+      expectedRowCodes: bankProfitCodes,
     },
     structureKey: JSON.stringify({
       grids,
@@ -3320,24 +3432,11 @@ async function waitForBusinessSectionReady(windowInstance, {
  * Returns { ok, status, inspection }. A false `ok` is always reported to the
  * caller rather than filling whatever happens to be showing.
  */
-async function navigateToSection(
-  windowInstance,
-  {
-    sectionId,
-    taxYear,
-    taxpayerIdentifier = "",
-    hosts = DEFAULT_HOSTS,
-    requiredGridTitle = null,
-    requiredRowCodes = [],
-  } = {},
+function validateRequiredGridTarget(
+  sectionId,
+  requiredGridTitle = null,
+  requiredRowCodes = [],
 ) {
-  const profile = ALL_SECTION_TOUR.find((entry) => entry.id === sectionId);
-  if (!profile) return { ok: false, status: "unsupported_section" };
-
-  // Grid titles are part of the live safety contract. Tax Deductions has
-  // separate Adjustable and Final Tax grids, so a row is permitted only with
-  // the header captured for that exact row -- never because it happens to sit
-  // on the same Employment tab.
   const normalizedGridTitle = normalizeSetupLabel(requiredGridTitle);
   const safeRowCodes = Array.from(
     new Set(
@@ -3352,7 +3451,7 @@ async function navigateToSection(
       "final tax": ["64020007"],
     },
     other_sources_tax_deductions: {
-      "final tax": ["64040052"],
+      "final tax": Object.keys(VERIFIED_ABSENT_CODE_ROUTES),
     },
   };
   if (normalizedGridTitle) {
@@ -3361,14 +3460,48 @@ async function navigateToSection(
       return { ok: false, status: "unsupported_grid_target" };
     const allowedRows = allowedTaxGridRows[normalizedGridTitle];
     if (!allowedRows) return { ok: false, status: "unsupported_grid_target" };
-    if (
-      safeRowCodes.length !== 1 ||
-      safeRowCodes.some((code) => !allowedRows.includes(code))
-    )
+    const verifiedAbsentRoute = Object.values(VERIFIED_ABSENT_CODE_ROUTES).some(
+      (route) =>
+        route.sectionId === sectionId &&
+        normalizeSetupLabel(route.gridTitle) === normalizedGridTitle,
+    );
+    const hasOneAllowedCode =
+      safeRowCodes.length === 1 &&
+      safeRowCodes.every((code) => allowedRows.includes(code));
+    const hasVerifiedAbsentCodeRoute =
+      safeRowCodes.length === 0 && verifiedAbsentRoute;
+    if (!hasOneAllowedCode && !hasVerifiedAbsentCodeRoute)
       return { ok: false, status: "unsupported_grid_rows" };
   } else if (safeRowCodes.length) {
     return { ok: false, status: "grid_title_required" };
   }
+  return { ok: true, normalizedGridTitle, safeRowCodes };
+}
+
+async function navigateToSection(
+  windowInstance,
+  {
+    sectionId,
+    taxYear,
+    taxpayerIdentifier = "",
+    hosts = DEFAULT_HOSTS,
+    requiredGridTitle = null,
+    requiredRowCodes = [],
+  } = {},
+) {
+  const profile = ALL_SECTION_TOUR.find((entry) => entry.id === sectionId);
+  if (!profile) return { ok: false, status: "unsupported_section" };
+
+  // Grid titles/codes are part of the live safety contract. The one explicit
+  // absent-row route may name its verified section/grid without claiming that
+  // its not-yet-created code was observed in the tour.
+  const targetValidation = validateRequiredGridTarget(
+    sectionId,
+    requiredGridTitle,
+    requiredRowCodes,
+  );
+  if (!targetValidation.ok) return targetValidation;
+  const { normalizedGridTitle, safeRowCodes } = targetValidation;
 
   // openReturn is what unlocks the navigation action allowlist in portalProbe.
   // Without it every section click returns "navigation_not_enabled".
@@ -3572,10 +3705,10 @@ async function navigateToSection(
       };
   }
 
-  // Salary withholding is inside its own collapsible "Adjustable Tax" grid.
-  // The earlier section tour may have expanded it, but switching away can
-  // collapse the grid again. Re-open only the exact, allowlisted grid and
-  // require the packet's row code to be visible before the filler runs.
+  // Tax Deductions grids can collapse after switching sections. Re-open only
+  // the exact, allowlisted grid and require ordinary packet row codes to be
+  // visible before filling. The one verified absent-code route instead checks
+  // the grid here and lets its dedicated driver add/verify the missing row.
   if (normalizedGridTitle) {
     // The two allowed Tax Deductions grids do not have the same complete row
     // shape. Final Tax includes the IRIS-calculated, disabled Tax Chargeable
@@ -3755,12 +3888,7 @@ async function inspectNavigation(
       : sectionIds.map((id) =>
           ALL_SECTION_TOUR.find((section) => section.id === id),
         );
-  if (
-    !tourPlan.length ||
-    !(tourPlan[0]?.id === "salary" || Object.hasOwn(BUSINESS_CONTRACT, tourPlan[0]?.id)) ||
-    tourPlan.some((section) => !section) ||
-    new Set(tourPlan.map((section) => section.id)).size !== tourPlan.length
-  ) {
+  if (!isSupportedSectionTourPlan(tourPlan)) {
     throw new Error("Unsupported or ambiguous section inspection plan.");
   }
   const read = async () => {
@@ -4386,10 +4514,10 @@ async function inspectNavigation(
     );
     if (inspectSections && state.sectionTour && !state.sectionTour.complete)
       return runSectionTour(snapshot);
-    if (inspectSections && tourPlan[0].group === "Business") {
-      // Business-only returns need no Employment/Salary controls. Start at
-      // cursor zero so the normal guarded section navigation verifies Data,
-      // business panel, exact tab, identity/year and stable loaded grids.
+    if (inspectSections && shouldStartSectionTourAtZero(tourPlan)) {
+      // Business-only and Bank Profit-only returns need no Employment/Salary
+      // controls. Start at cursor zero so the normal guarded section navigation
+      // verifies Data, the exact panel/tab, identity/year and stable grids.
       state.sectionTour = { cursor: 0, sections: [], complete: false, pending: null };
       return runSectionTour(snapshot);
     }
@@ -4900,7 +5028,7 @@ async function inspectNavigation(
   if (statuses.includes("clicked")) {
     onStep(
       "existing_draft_open",
-      `Opened the matching taxpayer / 114(1) / TY${taxYear} draft using its pencil action.`,
+      `Opened the 114(1) / TY${taxYear} draft from the authenticated IRIS dashboard using its pencil action; verifying the taxpayer in the return header next.`,
     );
     return verifyDocument(await waitForDocument());
   }
@@ -4909,7 +5037,7 @@ async function inspectNavigation(
   if (statuses.includes("ambiguous"))
     return { inspection: response, requiredAction: "portal_draft_ambiguous" };
   if (statuses.includes("row_unverified"))
-    return { inspection: response, requiredAction: "portal_document_mismatch" };
+    return { inspection: response, requiredAction: "portal_taxpayer_unverified" };
   if (statuses.includes("grid_incomplete"))
     return {
       inspection: response,
@@ -5082,6 +5210,9 @@ module.exports = {
   SALARY_ONLY_SECTION_IDS,
   SALARY_WITHHOLDING_SECTION_IDS,
   BANK_PROFIT_SECTION_IDS,
+  buildHandoffSectionIds,
+  isSupportedSectionTourPlan,
+  shouldStartSectionTourAtZero,
   normalizeSetupLabel,
   getExpectedOriginalTaxPeriod,
   classifyNewReturnSetupStage,
@@ -5090,6 +5221,8 @@ module.exports = {
   isManualNewReturnStage,
   describeEconomicTransactionsGate,
   buildSectionCodeIndex,
+  VERIFIED_ABSENT_CODE_ROUTES,
+  validateRequiredGridTarget,
   planSectionFills,
   isAllowedPortalUrl,
   portalProbe,

@@ -664,6 +664,7 @@ test("packaged Windows agent includes the new module and frontend uses one trans
     fs.readFileSync(path.join(root, "electron-connect/package.json"), "utf8"),
   );
   assert.ok(agentPackage.build.files.includes("iris-navigation.js"));
+  assert.ok(agentPackage.build.files.includes("iris-bank-profit-row-driver.js"));
   const ui = fs.readFileSync(
     path.join(root, "components/tax/fbr-connect-client.tsx"),
     "utf8",

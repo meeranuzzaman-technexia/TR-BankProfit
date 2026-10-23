@@ -270,6 +270,42 @@ test("live: ticks only what the packet needs", async () => {
   for (const other of ["7055", "7087", "7070", "7061"]) assert.ok(!codes.includes(other), `${other} must not be added`);
 });
 
+test("live: an already-present expense that unlocks after the chooser closes is filled without ADD or a duplicate", async () => {
+  const fake = new FakeIris({ knownIbans: KNOWN, unlockExpenseRowsOnCancel: ["7052"] });
+  fake.show("wealth_reconciliation");
+  const row = fake.cloneTemplate(fake.templates["7052"][0]);
+  const input = row.querySelector(".data-middle-child-wapper input");
+  input.disabled = true;
+  fake.insertAfter(row, fake.row("7089"));
+  const h = harness({ iris: fake });
+  const { results } = await h.run([wf("7052", 9000)]);
+  assert.equal(results[0].status, filler.FILL_STATUS.FILLED, JSON.stringify(results[0]));
+  h.fake.show("wealth_reconciliation");
+  assert.equal(h.fake.rowsWithId("7052").length, 1, "existing row is reused, never duplicated");
+  assert.equal(h.fake.inputValue(h.fake.row("7052")), "9000");
+  assert.ok(h.steps.some((step) => step.step === "wealth_expenses_present_after_modal"));
+  assert.equal(h.fake.clicks.filter((click) => click.inDialog && /^add$/i.test(click.text)).length, 0);
+  assert.equal(h.fake.dialogs().length, 0);
+});
+
+test("live: an already-present expense that stays locked is not duplicated and reports the actual blocker", async () => {
+  const fake = new FakeIris({ knownIbans: KNOWN });
+  fake.show("wealth_reconciliation");
+  const row = fake.cloneTemplate(fake.templates["7052"][0]);
+  const input = row.querySelector(".data-middle-child-wapper input");
+  input.disabled = true;
+  fake.insertAfter(row, fake.row("7089"));
+  const h = harness({ iris: fake });
+  const { results } = await h.run([wf("7052", 9000)]);
+  assert.equal(results[0].status, driver.WEALTH_STATUS.SETUP_FAILED);
+  assert.equal(results[0].setupStatus, "expenses_already_present_uneditable");
+  assert.ok(h.steps.some((step) => step.step === "wealth_expenses_present_but_uneditable"));
+  assert.equal(fake.dialogs().length, 0, "the chooser was cancelled");
+  assert.equal(fake.rowsWithId("7052").length, 1, "no duplicate row was created");
+  assert.equal(fake.inputValue(fake.row("7052")), "");
+  assert.equal(fake.clicks.filter((click) => click.inDialog && /^add$/i.test(click.text)).length, 0);
+});
+
 test("live: a second run clicks nothing and reports already_correct", async () => {
   const h = harness();
   await h.run();

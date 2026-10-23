@@ -37,7 +37,7 @@
  *   - Dry mode never clicks inside the page; it only reads and reports.
  */
 
-const BUILD_TAG = "fix52-computed-surcharge-readback-20261020";
+const BUILD_TAG = "fix60-bank-profit-category-routing-20261023";
 
 const EMPLOYER_STATUS = Object.freeze({
   ALREADY_LISTED: "already_listed",

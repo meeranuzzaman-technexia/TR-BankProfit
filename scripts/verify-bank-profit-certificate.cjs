@@ -27,6 +27,7 @@ require.extensions[".ts"] = function (module, filename) {
 const fields = require(path.join(root, "lib/tax/bank-profit-certificate-fields.ts"));
 const review = require(path.join(root, "lib/tax/document-review-required.ts"));
 const iris = require(path.join(root, "lib/tax/iris-bank-profit-capture.ts"));
+const portalFieldMap = require(path.join(root, "lib/tax/portal-field-map.ts"));
 
 const L = fields.BANK_PROFIT_CERTIFICATE_LABELS;
 const fixtureValues = {
@@ -121,8 +122,55 @@ test("reviewed certificate facts select the exact captured Section 151 IRIS row"
   assert.deepEqual(iris.BANK_PROFIT_FINAL_TAX_ROWS["bank-or-financial-institution-deposit"], {
     code: "64040052",
     description: "Profit on Debt u/s 151(1)(b) from Bank Accounts / Deposits",
-    stableWriteableChildCaptured: true,
+    writableDetailCreationVerified: true,
   });
+});
+
+test("Bank Profit fields use the statement gross and certificate withholding on the captured 64040052 row", () => {
+  const map = portalFieldMap.buildPortalFieldMap({
+    taxYear: 2026,
+    filerType: "myself",
+    taxpayerListStatus: "ATL",
+    ledgerEntries: [
+      {
+        id: "bank-ledger-profit",
+        entryType: "INCOME",
+        category: "BANK_PROFIT",
+        description: "Bank profit from annual statement",
+        amount: 45000,
+      },
+    ],
+    bankProfitSource: {
+      documentId: "approved-bank-certificate",
+      subcategory: "bank-or-financial-institution-deposit",
+      investment: "Bank savings deposit — synthetic",
+      contents: "1. PK00TEST0000000000000000\n2. Bank savings deposit — synthetic\n3. Test Bank Limited",
+      statementGrossProfit: 45000,
+      taxDeducted: 9000,
+      taxChargeable: 9000,
+    },
+  });
+  const fields = portalFieldMap.flattenPortalFieldMap(map);
+  assert.deepEqual(
+    fields
+      .filter((field) => field.irisCode === "64040052")
+      .map((field) => [field.column, field.value, field.portalArea, field.irisSection]),
+    [
+      ["Taxable Amount", "45000", "Other Sources", "Tax Deductions"],
+      ["Tax Deducted", "9000", "Other Sources", "Tax Deductions"],
+      ["Tax Chargeable", "9000", "Other Sources", "Tax Deductions"],
+    ],
+  );
+  assert.equal(
+    fields.some((field) => field.irisCode === "500312"),
+    false,
+    "do not duplicate the same bank profit in the computed Other Sources summary row",
+  );
+  assert.ok(fields.filter((field) => field.irisCode === "64040052").every(
+    (field) =>
+      field.bankProfitInvestment === "Bank savings deposit — synthetic" &&
+      field.bankProfitContents.includes("Test Bank Limited"),
+  ));
 });
 
 test("a clearly identified bank deposit maps when the certificate does not print a subsection", () => {
@@ -253,5 +301,8 @@ test("approval, edit invalidation, UI, and filing-completeness gates are wired",
   assert.match(packet, /statementGrossProfit: toMoneyNumber|const statementGrossProfit = toMoneyNumber/);
   assert.match(packet, /taxDeducted: approved\.taxDeducted/);
   assert.match(packet, /taxChargeable: toMoneyNumber\(calculationLine\.calculatedTax\)/);
+  assert.match(packet, /investment,/);
+  assert.match(packet, /approved\.iban \|\| approved\.accountNumber/);
+  assert.match(packet, /approved\.bankName\.trim\(\)/);
   assert.match(packet, /bankProfitSource,/);
 });

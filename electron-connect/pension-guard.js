@@ -1,7 +1,7 @@
 // Defense in depth: the server validates source freshness before handing out a
 // pinned context. The desktop repeats the narrow packet contract because it is
 // the last process allowed to type into a live IRIS return.
-const PENSION_GUARD_BUILD_TAG = "fix52-computed-surcharge-readback-20261020";
+const PENSION_GUARD_BUILD_TAG = "fix60-bank-profit-category-routing-20261023";
 
 function pensionEntryHold(snapshot) {
   const hasPension =
@@ -74,7 +74,7 @@ function pensionEntryHold(snapshot) {
         !match("1008", "Subject to Exemption", 10_000_000) ||
         !match("64020007", "Taxable Amount", excess) ||
         !match("64020007", "Tax Deducted", Number(source.taxDeducted)) ||
-        !match("923184", "Total Amount", surcharge) ||
+        !match("923184", "Total Income", surcharge) ||
         detailed?.mappingGaps?.pensionManualReview
       ) {
         message =

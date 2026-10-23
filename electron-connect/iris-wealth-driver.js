@@ -38,7 +38,7 @@
  *   - Dry mode never clicks inside the page; it only reads and reports.
  */
 
-const BUILD_TAG = "fix52-computed-surcharge-readback-20261020";
+const BUILD_TAG = "fix60-bank-profit-category-routing-20261023";
 
 // Kept in step with lib/tax/wealth-rows.ts. A test compares the two, so a
 // category added on one side without the other fails the build.
@@ -1181,6 +1181,44 @@ async function runWealthDriver(windowInstance, fields, options = {}) {
       title: DIALOG_TITLES.expenses,
       labels,
     });
+    const alreadyPresent = Object.entries(ticked.outcome || {})
+      .filter(([, state]) => state === "already_present")
+      .map(([label]) => label);
+    if (alreadyPresent.length) {
+      // A disabled, checked box means IRIS already has that expense category.
+      // The first read can miss its row while the section is settling; do not
+      // treat that as a failed click or press ADD (which could duplicate rows).
+      await abandon(DIALOG_TITLES.expenses, "Cancel");
+      const codes = missing.map((field) => String(field.irisCode));
+      const appeared = await waitFor(
+        () => run({ op: "inspect", codes }),
+        (state) =>
+          !state.dialogs.length &&
+          codes.every((code) =>
+            (state.rows[code] || []).some((row) => row.editable),
+          ),
+      );
+      if (appeared.ok) {
+        note(
+          "expenses_present_after_modal",
+          `IRIS already had ${alreadyPresent.join(", ")}; its editable row appeared after the dialog closed. No duplicate row was added.`,
+        );
+        return null;
+      }
+      const unresolved = missing
+        .filter(
+          (field) =>
+            !(appeared.value?.rows?.[String(field.irisCode)] || []).some(
+              (row) => row.editable,
+            ),
+        )
+        .map((field) => EXPENSE_ROWS[String(field.irisCode)] || field.irisCode);
+      note(
+        "expenses_present_but_uneditable",
+        `IRIS marked ${alreadyPresent.join(", ")} as already present, but no editable row appeared for ${unresolved.join(", ")}. The dialog was cancelled without ADD; no new expense row was added.`,
+      );
+      return "expenses_already_present_uneditable";
+    }
     const bad = Object.entries(ticked.outcome || {}).filter(
       ([, state]) => !["ticked", "already_checked"].includes(state),
     );

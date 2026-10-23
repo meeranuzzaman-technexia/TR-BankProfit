@@ -36,9 +36,10 @@ function rowsOf(doc) {
 }
 
 class FakeIris {
-  constructor({ knownIbans = {}, knownDonors = {}, modalOverrides = {} } = {}) {
+  constructor({ knownIbans = {}, knownDonors = {}, modalOverrides = {}, unlockExpenseRowsOnCancel = [] } = {}) {
     this.knownIbans = knownIbans;
     this.knownDonors = knownDonors;
+    this.unlockExpenseRowsOnCancel = new Set(unlockExpenseRowsOnCancel.map(String));
     this.clicks = [];
     this.dom = new JSDOM(
       `<!doctype html><html><body>
@@ -246,6 +247,17 @@ class FakeIris {
       return;
     }
     if (label === "cancel" || label === "close") {
+      if (kind === "expenses") {
+        // A previously-added row can be temporarily locked while IRIS renders;
+        // tests can model it unlocking as soon as the chooser is dismissed.
+        for (const code of this.unlockExpenseRowsOnCancel) {
+          for (const row of this.rowsWithId(code)) {
+            for (const input of row.querySelectorAll(".data-middle-child-wapper input")) {
+              input.disabled = false;
+            }
+          }
+        }
+      }
       dialog.remove();
       return;
     }

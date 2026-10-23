@@ -19,7 +19,10 @@ Module._resolveFilename = function (request, ...rest) {
 require.extensions[".ts"] = function (module, filename) {
   module._compile(
     ts.transpileModule(fs.readFileSync(filename, "utf8"), {
-      compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 },
+      compilerOptions: {
+        module: ts.ModuleKind.CommonJS,
+        target: ts.ScriptTarget.ES2020,
+      },
     }).outputText,
     filename,
   );
@@ -34,7 +37,46 @@ const filler = require(path.join(root, "electron-connect/iris-row-filler.js"));
 const captureRoot =
   process.env.BANK_PROFIT_IRIS_CAPTURES ||
   path.join(os.homedir(), "Downloads", "Bank Profit HTML");
-const capturesAvailable = fs.existsSync(captureRoot);
+
+// Accept both the original MHTML archive names and the user's uploaded HTML/HTM
+// names. Files are read in place; the test does not copy taxpayer portal pages.
+const CAPTURE_FILES = {
+  receipts: [
+    "Other Sources - Receipts-Deductions.mhtml",
+    "Other Source - Receipts-Deductions.htm",
+  ],
+  deductions: [
+    "Other Sources - Tax Deductions.mhtml",
+    "Other Source - Tax Deductions.html",
+  ],
+  finalTaxSelected: [
+    "Other Sources - Tax Deductions Final Tax Popup fields selected.mhtml",
+    "Other Source - Tax Deductions - Popup All fields selected.html",
+  ],
+  computations: [
+    "Tax Chargable-Payments - Computations.html",
+    "Tax Chargable-Payments - Computations.mhtml",
+  ],
+};
+
+function hasCapture(name) {
+  const candidates = CAPTURE_FILES[name] || [name];
+  return candidates.some((candidate) =>
+    fs.existsSync(path.join(captureRoot, candidate)),
+  );
+}
+
+function capturePath(name) {
+  const candidates = CAPTURE_FILES[name] || [name];
+  const found = candidates
+    .map((candidate) => path.join(captureRoot, candidate))
+    .find((candidate) => fs.existsSync(candidate));
+  assert.ok(
+    found,
+    `missing ${name} capture under ${captureRoot}; tried ${candidates.join(", ")}`,
+  );
+  return found;
+}
 
 function decodeMhtml(file) {
   const source = fs.readFileSync(file, "latin1");
@@ -50,8 +92,15 @@ function decodeMhtml(file) {
   return Buffer.from(quotedPrintable, "latin1").toString("utf8");
 }
 
+function htmlFor(name) {
+  const file = capturePath(name);
+  return /\.mhtml?$/i.test(file)
+    ? decodeMhtml(file)
+    : fs.readFileSync(file, "utf8");
+}
+
 function documentFor(name) {
-  return new JSDOM(decodeMhtml(path.join(captureRoot, name))).window.document;
+  return new JSDOM(htmlFor(name)).window.document;
 }
 
 function rowsFor(document, code) {
@@ -66,33 +115,91 @@ function inputState(row) {
   );
 }
 
-test("the stable Other Sources page proves 500312 is computed and 64040052 has one writable child", (context) => {
-  if (!capturesAvailable) return context.skip(`no captures at ${captureRoot}`);
-  const receipts = documentFor("Other Sources - Receipts-Deductions.mhtml");
-  assert.deepEqual(inputState(rowsFor(receipts, "500312")[0]), ["D", "D", "D", "D"]);
+function columnHeadersForRow(row) {
+  for (let parent = row.parentElement; parent; parent = parent.parentElement) {
+    const bars = [...parent.querySelectorAll(".heading-bar")].filter((bar) =>
+      [...bar.querySelectorAll("strong")].some(
+        (label) => label.textContent.trim().toLowerCase() === "code",
+      ),
+    );
+    if (bars.length === 1) {
+      return [...bars[0].querySelectorAll("strong")]
+        .map((label) => label.textContent.replace(/\s+/g, " ").trim())
+        .filter((label) => !/^(description|code|actions?)$/i.test(label));
+    }
+    if (bars.length > 1) return [];
+  }
+  return [];
+}
 
-  const deductions = documentFor("Other Sources - Tax Deductions.mhtml");
+const capturesAvailable =
+  fs.existsSync(captureRoot) &&
+  ["receipts", "deductions", "finalTaxSelected"].every((name) =>
+    CAPTURE_FILES[name].some((candidate) =>
+      fs.existsSync(path.join(captureRoot, candidate)),
+    ),
+  );
+
+test("the Other Sources income row is computed; 64040052 has a writable Final Tax detail row", (context) => {
+  if (!capturesAvailable) return context.skip(`no complete captures at ${captureRoot}`);
+  const receipts = documentFor("receipts");
+  const profitOnDebt = rowsFor(receipts, "500312");
+  assert.equal(profitOnDebt.length, 1);
+  assert.deepEqual(inputState(profitOnDebt[0]), ["D", "D", "D", "D"]);
+  assert.deepEqual(columnHeadersForRow(profitOnDebt[0]), [
+    "Total Amount",
+    "Subject to Final Tax",
+    "Subject to Exemption",
+    "Subject to Normal Tax",
+  ]);
+
+  const deductions = documentFor("deductions");
+  const bankDepositRows = rowsFor(deductions, "64040052");
   assert.deepEqual(
-    rowsFor(deductions, "64040052").map(inputState),
+    bankDepositRows.map(inputState),
     [
       ["D", "D", "D"],
       ["E", "E", "E"],
     ],
   );
+  assert.ok(
+    bankDepositRows[1].classList.contains("section-detail-child-row"),
+    "the only writable duplicate is the post-selection detail child",
+  );
+  assert.deepEqual(columnHeadersForRow(bankDepositRows[1]), [
+    "Taxable Amount",
+    "Tax Deducted",
+    "Tax Chargeable",
+  ]);
 });
 
-test("every supported Section 151 category is tied to the exact captured Final Tax code", (context) => {
-  if (!capturesAvailable) return context.skip(`no captures at ${captureRoot}`);
-  const popup = documentFor(
-    "Other Sources - Tax Deductions Final Tax Popup fields selected.mhtml",
-  );
+test("all supplied profit categories have an exact Final Tax code and the verified Investment-detail route", (context) => {
+  if (!capturesAvailable) return context.skip(`no complete captures at ${captureRoot}`);
+  const popup = documentFor("finalTaxSelected");
   for (const [subcategory, target] of Object.entries(BANK_PROFIT_FINAL_TAX_ROWS)) {
-    assert.ok(rowsFor(popup, target.code).length > 0, `${subcategory} -> ${target.code}`);
+    const rows = rowsFor(popup, target.code);
+    assert.ok(rows.length > 0, `${subcategory} -> ${target.code} is in the capture`);
+    assert.equal(target.writableDetailCreationVerified, true);
   }
 });
 
-test("desktop plan routes 64040052 to Other Sources and the filler picks its writable duplicate", (context) => {
-  if (!capturesAvailable) return context.skip(`no captures at ${captureRoot}`);
+test("the Computations capture confirms surcharge code 923184 uses the writable Total Income column", (context) => {
+  if (!hasCapture("computations"))
+    return context.skip(`no Computations capture at ${captureRoot}`);
+  const computations = documentFor("computations");
+  const surcharge = rowsFor(computations, "923184");
+  assert.equal(surcharge.length, 1);
+  assert.deepEqual(columnHeadersForRow(surcharge[0]), [
+    "Total Income",
+    "Subject to Final Tax",
+    "Subject to Exemption",
+    "Subject to Normal Tax",
+  ]);
+  assert.deepEqual(inputState(surcharge[0]), ["E", "D", "D", "D"]);
+});
+
+test("desktop plan routes 64040052 to Other Sources and the filler selects its writable duplicate", (context) => {
+  if (!capturesAvailable) return context.skip(`no complete captures at ${captureRoot}`);
   const tour = {
     sections: [
       {
@@ -121,9 +228,7 @@ test("desktop plan routes 64040052 to Other Sources and the filler picks its wri
   assert.equal(plan.groups[0].sectionId, "other_sources_tax_deductions");
   assert.equal(plan.groups[0].gridTitle, "Final Tax");
 
-  const dom = new JSDOM(
-    decodeMhtml(path.join(captureRoot, "Other Sources - Tax Deductions.mhtml")),
-  );
+  const dom = new JSDOM(htmlFor("deductions"));
   global.document = dom.window.document;
   global.window = dom.window;
   global.Event = dom.window.Event;

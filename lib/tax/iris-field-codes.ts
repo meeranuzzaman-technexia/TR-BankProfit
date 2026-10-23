@@ -110,10 +110,12 @@ export const CATEGORY_TO_IRIS_MAP: Record<string, { incomeCode: string; taxCode?
   PENSION_OTHER_SOURCES: [
     { incomeCode: IRIS_CODES.OTHER_SOURCES_ANNUITY_PENSION.code, description: "Annuity/pension reported under Other Sources (explicit only — never automatic)" },
   ],
-  // Verified line items only. BANK_PROFIT / PROFIT_ON_DEBT / DIVIDEND are final-tax
-  // routes: their AMOUNT belongs in Other Sources → 'Subject to Final Tax' (a column
-  // with no live capture yet) and their TAX arrives through the 151(a)/(b) taxCredit.
-  // Pointing the amount at 500312 + a normal-tax column under-stated the final tax.
+  // Verified line items only. BANK_PROFIT / PROFIT_ON_DEBT use the separate
+  // certificate-backed path: each approved Section 151 category maps to its exact
+  // Other Sources → Tax Deductions → Final Tax row. Its three editable detail cells
+  // carry gross Taxable Amount, actual Tax Deducted, and saved-calculation Tax
+  // Chargeable. Do not write the computed 500312 Profit on Debt summary.
+  // DIVIDEND remains a separate final-tax mapping gap pending its own capture.
   RENT: [
     { incomeCode: IRIS_CODES.PROPERTY_RENT_RECEIVED.code, taxCode: IRIS_CODES.ADJ_RENT_155.code, description: "Rent" },
   ],

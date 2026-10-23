@@ -1,6 +1,6 @@
 "use strict";
 const navigation = require("./iris-navigation");
-const BUILD_TAG = "fix52-computed-surcharge-readback-20261020";
+const BUILD_TAG = "fix60-bank-profit-category-routing-20261023";
 
 // Captures 30/32: only the explicit Personal Expenditure reason (3212).
 // This driver creates a reason row, never writes money, saves or submits.

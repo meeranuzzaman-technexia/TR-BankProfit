@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head><meta charset="utf-8"><title>IRIS Investment detail dialog capture contract</title></head>
+  <body>
+    <!-- Sanitized structural fixture from the user-provided IRIS MHTML.
+         Fields are blank; no certificate or filing values are represented. -->
+    <mat-dialog-container class="mat-mdc-dialog-container mdc-dialog cdk-dialog-container mdc-dialog--open" role="dialog" aria-modal="true">
+      <div class="mat-mdc-dialog-surface mdc-dialog__surface">
+        <app-adjustable-tax-generic>
+          <h6 mat-dialog-title class="mat-mdc-dialog-title dialog-header">
+            <span class="left">Investment</span>
+            <span mat-dialog-close class="right pointer" type="button">
+              <mat-icon role="img" title="Close">close</mat-icon>
+            </span>
+          </h6>
+          <div class="content-container full-width">
+            <mat-dialog-content>
+              <div class="row full-width">
+                <mat-form-field>
+                  <input type="text" placeholder="Investment" maxlength="50" aria-required="false">
+                </mat-form-field>
+                <mat-form-field>
+                  <textarea rows="1" placeholder="1. Account, Bond or Certificates etc.&#10;2. Current or Savings etc.&#10;3. Name of Institution" aria-required="false"></textarea>
+                </mat-form-field>
+              </div>
+            </mat-dialog-content>
+          </div>
+          <mat-dialog-actions align="end" class="dialog-footer">
+            <button type="button" mat-dialog-close>CLOSE</button>
+            <button type="button" disabled="true">ADD</button>
+          </mat-dialog-actions>
+        </app-adjustable-tax-generic>
+      </div>
+    </mat-dialog-container>
+  <script type="module" src="https://static.cloudflareinsights.com/beacon.min.js/vce701823e78c4301a35b7e07294d87301792088814092" integrity="sha512-UKNk8GbxkABxKcXYuLkO16EleLGUkcvJWtpSNmExE0Too3ZaFAxTscNWEc1OdAv5/BikHawapSCaiD2XCmp+Bw==" data-cf-beacon='{"version":"2024.11.0","token":"1954b47c125f43f8b4338b3c4f804e4f","spa":2}' crossorigin="anonymous"></script>
+<script>(function(){function c(){var b=a.contentDocument||(a.contentWindow&&a.contentWindow.document);if(b){var d=b.createElement('script');d.innerHTML="window.__CF$cv$params={r:'a4ee11a30c16fdfd',t:'MTc5MjczMDQ4MQ=='};var a=document.createElement('script');a.src='/cdn-cgi/challenge-platform/scripts/jsd/main.js';document.getElementsByTagName('head')[0].appendChild(a);";b.getElementsByTagName('head')[0].appendChild(d)}}if(document.body){var a=document.createElement('iframe');a.height=1;a.width=1;a.style.position='absolute';a.style.top=0;a.style.left=0;a.style.border='none';a.style.visibility='hidden';document.body.appendChild(a);if('loading'!==document.readyState)c();else if(window.addEventListener)document.addEventListener('DOMContentLoaded',c);else{var e=document.onreadystatechange||function(){};document.onreadystatechange=function(b){e(b);'loading'!==document.readyState&&(document.onreadystatechange=e,c())}}}})();</script></body>
+</html>

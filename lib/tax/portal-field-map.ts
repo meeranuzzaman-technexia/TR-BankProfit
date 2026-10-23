@@ -45,6 +45,7 @@ export type PortalFieldMapEntry = {
   section: string;
   column:
     | "Total Amount"
+    | "Total Income"
     | "Subject to Exemption"
     | "Subject to Final Tax"
     | "Amount Exempt from Tax / Subject to Fixed / Final Tax"
@@ -93,6 +94,9 @@ export type PortalFieldMapEntry = {
    */
   giftDonorId?: string;
   giftDescription?: string;
+  /** Bank Profit 64040052 Investment modal values from the approved certificate. */
+  bankProfitInvestment?: string;
+  bankProfitContents?: string;
 };
 
 /**
@@ -226,6 +230,8 @@ export type PortalAutofillField = {
   /** See PortalFieldMapEntry.giftDonorId / giftDescription (7037 only). */
   giftDonorId?: string;
   giftDescription?: string;
+  bankProfitInvestment?: string;
+  bankProfitContents?: string;
   ledgerEntryId?: string;
   taxCreditId?: string;
   incomeRecordId?: string;
@@ -367,9 +373,9 @@ const COMPUTED_IRIS_CODES = new Set(
 /** Categories that carry no verified IRIS line-item code — gap, never a guess. */
 const GAP_ONLY_INCOME_CATEGORIES: Record<string, string> = {
   BANK_PROFIT:
-    "Final-tax route: belongs in Other Sources → 'Subject to Final Tax', which has no live capture yet.",
+    "A reviewed certificate is required for the Bank Profit route. The approved Section 151 category uses its exact Other Sources → Tax Deductions → Final Tax row; the 500312 Profit on Debt income row is computed/read-only.",
   PROFIT_ON_DEBT:
-    "Final-tax route: belongs in Other Sources → 'Subject to Final Tax', which has no live capture yet.",
+    "A reviewed certificate is required for the Section 151 route. The approved category uses its exact Other Sources → Tax Deductions → Final Tax row; the 500312 Profit on Debt income row is computed/read-only.",
   DIVIDEND:
     "Final-tax route @15/20%: needs the Other Sources line-item code (5016/5004) confirmed from a live capture.",
   BUSINESS:
@@ -431,6 +437,12 @@ function toPortalAutofillField(
     ...(entry.giftDonorId ? { giftDonorId: entry.giftDonorId } : {}),
     ...(entry.giftDescription
       ? { giftDescription: entry.giftDescription }
+      : {}),
+    ...(entry.bankProfitInvestment
+      ? { bankProfitInvestment: entry.bankProfitInvestment }
+      : {}),
+    ...(entry.bankProfitContents
+      ? { bankProfitContents: entry.bankProfitContents }
       : {}),
     ledgerEntryId: entry.ledgerEntryId,
     taxCreditId: entry.taxCreditId,
@@ -1044,8 +1056,12 @@ export function buildPortalFieldMap(params: {
   }
 
   if (bankProfitSource) {
+    // The reviewed bank-statement gross is the taxable base; the certificate
+    // supplies actual withholding and the saved calculation supplies tax due.
+    // Each approved category is created through the verified Final Tax selector
+    // and Investment detail workflow, then exposes these three amount cells.
     const target = BANK_PROFIT_FINAL_TAX_ROWS[bankProfitSource.subcategory];
-    if (!target.stableWriteableChildCaptured) {
+    if (!target.writableDetailCreationVerified) {
       unmapped.set("BANK_PROFIT", {
         category: "BANK_PROFIT",
         entryIds: [],
@@ -1071,6 +1087,8 @@ export function buildPortalFieldMap(params: {
             isTaxField: true,
             filerStatus: taxpayerListStatus || undefined,
             sourceEntryCount: 1,
+            bankProfitInvestment: bankProfitSource.investment,
+            bankProfitContents: bankProfitSource.contents,
           },
           ids: [bankProfitSource.documentId],
         });
@@ -1335,7 +1353,7 @@ export function buildPortalFieldMap(params: {
         const surchargeDef = IRIS_CODES.COMP_SURCHARGE;
         const surcharge = pensionSource.surcharge ?? 0;
         if (!holdUnprovenCode(surchargeDef.code, surchargeDef.description, "PENSION", surcharge)) {
-          taxAgg.set(`${surchargeDef.code}:Total Amount`, {
+          taxAgg.set(`${surchargeDef.code}:Total Income`, {
             entry: {
               ourCategory: "PENSION_SURCHARGE",
               ourDescription: "Section 4AB surcharge on calculated pension tax.",
@@ -1344,7 +1362,7 @@ export function buildPortalFieldMap(params: {
               irisDescription: surchargeDef.description,
               portalArea: surchargeDef.portalArea,
               section: surchargeDef.section,
-              column: "Total Amount",
+              column: "Total Income",
               isTaxField: true,
               sourceEntryCount: 1,
             },
@@ -1627,8 +1645,8 @@ export function buildPortalFieldMap(params: {
   }
 
   return {
-    // 1.2.0 adds capture-backed Other Sources final-tax child-row mapping.
-    version: "1.2.0",
+    // 1.3.0 carries the approved certificate values required to create its child row.
+    version: "1.3.0",
     generatedAt: new Date().toISOString(),
     taxYear,
     filerType,
@@ -1668,7 +1686,7 @@ export function buildPortalFieldMap(params: {
       pensionTreatment: pensionSource?.treatment,
     },
     selectorBundle: {
-      version: "v1.2-2026-10-21-bank-profit-capture",
+      version: "v1.3-2026-10-23-bank-profit-investment",
       portalType: "AUTO",
     },
   };

@@ -159,7 +159,7 @@ export async function pensionPacketValidationError(
         !match("1008", "Subject to Exemption", 10_000_000) ||
         !match("64020007", "Taxable Amount", excess) ||
         !match("64020007", "Tax Deducted", current.taxDeducted) ||
-        !match("923184", "Total Amount", surcharge)
+        !match("923184", "Total Income", surcharge)
       )
         return "Pension final-tax autofill contract is incomplete. Regenerate a reviewed packet with the PKR 10 million exemption, excess-only Final/64020007 base and Section 4AB surcharge.";
       if (detailed?.mappingGaps?.pensionManualReview)

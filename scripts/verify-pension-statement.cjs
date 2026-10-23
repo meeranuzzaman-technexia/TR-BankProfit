@@ -358,7 +358,7 @@ test("reviewed high pension produces a complete final-tax and surcharge contract
   const finalTax = flat.filter((f) => ["64020007", "923184"].includes(f.irisCode));
   assert.deepEqual(
     plain(finalTax.map((f) => [f.irisCode, f.column, f.value])),
-    [["64020007", "Taxable Amount", "992000"], ["64020007", "Tax Deducted", "0"], ["923184", "Total Amount", "4960"]],
+    [["64020007", "Taxable Amount", "992000"], ["64020007", "Tax Deducted", "0"], ["923184", "Total Income", "4960"]],
   );
   assert.equal(
     finalTax.find((f) => f.column === "Taxable Amount").replaceOnlyIfExisting,

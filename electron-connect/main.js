@@ -74,6 +74,11 @@ const TAX_DEDUCTION_GRID_BY_CODE = Object.freeze({
   "64020004": "Adjustable Tax",
   "64020007": "Final Tax",
   "64040052": "Final Tax",
+  "64040053": "Final Tax",
+  "64040054": "Final Tax",
+  "64330054": "Final Tax",
+  "64330055": "Final Tax",
+  "64330056": "Final Tax",
 });
 // Phase 1 — real-portal autofill.
 //
@@ -165,9 +170,10 @@ function resolveAutofillMode(jobContext) {
 // Independent controller stamp: a new navigator must not make an OLD main
 // process appear fully updated (the mixed fix10/fix11 rollout hid this).
 const irisBusinessRowDriver = require("./iris-business-row-driver");
-const AGENT_BUILD_TAG = "fix52-computed-surcharge-readback-20261020";
+const irisBankProfitRowDriver = require("./iris-bank-profit-row-driver");
+const AGENT_BUILD_TAG = "fix60-bank-profit-category-routing-20261023";
 function getAgentBuildLabel() {
-  return `${AGENT_BUILD_TAG} | navigator: ${irisNavigation.BUILD_TAG} | filler: ${irisRowFiller.BUILD_TAG} | pension: ${PENSION_GUARD_BUILD_TAG}`;
+  return `${AGENT_BUILD_TAG} | navigator: ${irisNavigation.BUILD_TAG} | filler: ${irisRowFiller.BUILD_TAG} | employer: ${irisEmployerDriver.BUILD_TAG} | wealth: ${irisWealthDriver.BUILD_TAG} | bank-profit-row: ${irisBankProfitRowDriver.BUILD_TAG} | pension: ${PENSION_GUARD_BUILD_TAG}`;
 }
 function assertNavigatorBuild() {
   const mismatched = [
@@ -176,6 +182,9 @@ function assertNavigatorBuild() {
     // dangerous as a stale navigator, and it ships as a loose file too.
     ["iris-row-filler.js", irisRowFiller.BUILD_TAG],
     ["iris-business-row-driver.js", irisBusinessRowDriver.BUILD_TAG],
+    ["iris-employer-driver.js", irisEmployerDriver.BUILD_TAG],
+    ["iris-wealth-driver.js", irisWealthDriver.BUILD_TAG],
+    ["iris-bank-profit-row-driver.js", irisBankProfitRowDriver.BUILD_TAG],
     ["pension-guard.js", PENSION_GUARD_BUILD_TAG],
   ].filter(([, tag]) => tag !== AGENT_BUILD_TAG);
   if (mismatched.length) {
@@ -3598,7 +3607,6 @@ async function runLocalIrisNavigationCheck(jobContext, job) {
   const snapshot = packet.snapshot || jobContext.snapshot || {};
   const pensionHold = pensionEntryHold(snapshot);
   if (pensionHold) return pensionHold;
-  const windowInstance = await ensureWorkerWindow();
   const config = jobContext.taxAutomationConfig || {};
   const hasBusiness = Array.isArray(snapshot.filing?.incomeSources) && snapshot.filing.incomeSources.includes("business");
   if (hasBusiness && !["business-entry-v1", "business-entry-v2"].includes(snapshot.business?.version)) {
@@ -3610,7 +3618,6 @@ async function runLocalIrisNavigationCheck(jobContext, job) {
     ? [...new Set(snapshot.business.fields.map((field) => ({ "Balance Sheet": "business_balance_sheet", "Manufacturing/ Trading Items": "business_trading", "Other Revenues": "business_other_revenues", "Admin, Selling & Financial Expenses": "business_admin", "Adjustments": "business_adjustments", "Inadmissible/Admissible Deductions": "business_deductions" })[field.section]))]
     : [];
   if (businessSections.some(section => !section)) throw new Error("Unverified business section in approved packet; regenerate it before entry.");
-  const salaryRequested = !hasBusiness || snapshot.filing.incomeSources.includes("salary") || snapshot.filing.incomeSources.includes("pension");
   const packetFields = Array.isArray(snapshot.portalFieldMap)
     ? snapshot.portalFieldMap
     : Array.isArray(snapshot.portalFieldMap?.adjustableTaxFields)
@@ -3620,16 +3627,30 @@ async function runLocalIrisNavigationCheck(jobContext, job) {
     (field) => String(field?.irisCode || "") === "923184",
   );
   const bankProfitRequested = packetFields.some(
-    (field) => String(field?.irisCode || "") === "64040052",
+    (field) => irisBankProfitRowDriver.BANK_PROFIT_CODES.includes(String(field?.irisCode || "").trim()),
   );
-  const handoffSectionIds = [
-    ...(salaryRequested ? irisNavigation.SALARY_WITHHOLDING_SECTION_IDS : []),
-    ...businessSections,
-    ...(bankProfitRequested ? irisNavigation.BANK_PROFIT_SECTION_IDS : []),
-    ...(computationsRequested ? ["computations"] : []),
-  ];
+  const bankProfitFields = packetFields.filter((field) =>
+    irisBankProfitRowDriver.BANK_PROFIT_CODES.includes(String(field?.irisCode || "").trim()),
+  );
+  if (
+    bankProfitFields.length &&
+    (bankProfitFields.some((field) => !field.bankProfitInvestment || !field.bankProfitContents) ||
+      new Set(bankProfitFields.map((field) => field.bankProfitInvestment)).size !== 1 ||
+      new Set(bankProfitFields.map((field) => field.bankProfitContents)).size !== 1)
+  ) {
+    const message = "This Bank Profit packet predates the verified category-detail workflow. Generate and approve a fresh packet so its certificate Investment and Contents can be entered. Nothing was changed in FBR.";
+    return { paused: true, pauseAction: "portal_state_confirmation", pauseMessage: message,
+      executionLog: [], result: { requiredAction: "portal_state_confirmation", message, submitted: false, bankProfitCoverage: "missing_detail_payload" } };
+  }
+  const windowInstance = await ensureWorkerWindow();
+  const handoffSectionIds = irisNavigation.buildHandoffSectionIds({
+    incomeSources: snapshot.filing?.incomeSources,
+    businessSections,
+    bankProfitRequested,
+    computationsRequested,
+  });
   if (!handoffSectionIds.length) {
-    const message = "No verified business amount is queued. Confirm the sales basis or review/map the Business Balance Sheet, then regenerate and approve the packet. Remaining business schedules are manual.";
+    const message = "No verified IRIS field is queued for the approved income sources. Review the packet mapping and any required source documents, then regenerate and approve it. Nothing was changed in FBR.";
     return { paused: true, pauseAction: "portal_state_confirmation", pauseMessage: message,
       executionLog: [], result: { requiredAction: "portal_state_confirmation", message, submitted: false, businessCoverage: "no_verified_targets" } };
   }
@@ -3924,6 +3945,8 @@ async function runLocalIrisNavigationCheck(jobContext, job) {
       "Confirm the intended taxpayer CNIC or NTN in the FBR window, then choose Continue. It must match this filing.",
     portal_taxpayer_mismatch:
       "The taxpayer details in FBR do not match this filing. Check the correct FBR account and taxpayer before continuing. No tax values were changed.",
+    portal_taxpayer_unverified:
+      "The dashboard return does not show a labelled Registration No/Number, so TaxRocket cannot verify that it belongs to this taxpayer. Open the intended return manually, then choose Continue. No tax values were changed.",
     portal_document_mismatch:
       "The open FBR return does not match the requested form, full-year period, or tax year. Check the correct return before continuing.",
     portal_draft_ambiguous:
@@ -4313,6 +4336,13 @@ async function runRealIrisAutofill(jobContext, job, mode) {
       "tax_deductions",
       "other_sources_tax_deductions",
     ].includes(group.sectionId);
+    const isBankProfitFinalTaxGroup =
+      group.sectionId === "other_sources_tax_deductions" &&
+      group.fields.length > 0 &&
+      group.fields.every((field) =>
+        irisBankProfitRowDriver.BANK_PROFIT_CODES.includes(String(field.irisCode || "").trim()),
+      ) &&
+      new Set(group.fields.map((field) => String(field.irisCode || "").trim())).size === 1;
     const taxDeductionGridTitles = isTaxDeductionGroup
       ? Array.from(
           new Set(
@@ -4351,9 +4381,13 @@ async function runRealIrisAutofill(jobContext, job, mode) {
       taxYear,
       taxpayerIdentifier,
       requiredGridTitle: isTaxDeductionGroup ? taxDeductionGridTitles[0] : null,
-      requiredRowCodes: isTaxDeductionGroup
-        ? group.fields.map((field) => field.irisCode)
-        : [],
+      requiredRowCodes: isBankProfitFinalTaxGroup
+        ? []
+        : isTaxDeductionGroup
+          ? Array.from(
+              new Set(group.fields.map((field) => field.irisCode)),
+            )
+          : [],
     });
     if (!moved.ok) {
       onStep(
@@ -4380,6 +4414,70 @@ async function runRealIrisAutofill(jobContext, job, mode) {
     const isBusinessGroup = Object.hasOwn(irisNavigation.BUSINESS_CONTRACT, group.sectionId);
     let sectionVerified = Boolean(sectionTour?.sections?.find(entry => entry?.id === group.sectionId)?.mappingVerified);
     let readiness = null;
+    if (isBankProfitFinalTaxGroup) {
+      const investments = Array.from(
+        new Set(group.fields.map((field) => field.bankProfitInvestment).filter(Boolean)),
+      );
+      const contents = Array.from(
+        new Set(group.fields.map((field) => field.bankProfitContents).filter(Boolean)),
+      );
+      const bankProfitCode = String(group.fields[0]?.irisCode || "").trim();
+      const addIfMissing = group.fields.some((field) => {
+        const taken =
+          takenKeys.has(autofillItemKey(field)) &&
+          field.replaceOnlyIfExisting === undefined &&
+          String(field.irisCode || "") !== "923184";
+        return !taken;
+      });
+      let setup;
+      try {
+        setup = await irisBankProfitRowDriver.ensureBankProfitFinalTaxRow(
+          windowInstance,
+          {
+            mode,
+            code: bankProfitCode,
+            addIfMissing,
+            investment: investments.length === 1 ? investments[0] : "",
+            contents: contents.length === 1 ? contents[0] : "",
+            beforeStep: () =>
+              ensureNavigationJobActive(
+                job.id,
+                String(taxpayerIdentifier || "")
+                  .trim()
+                  .replace(/[ -]/g, ""),
+              ),
+            onStep,
+          },
+        );
+      } catch (error) {
+        setup = {
+          ok: false,
+          status: "driver_error",
+          message: `Bank Profit Final Tax row setup failed (${error?.message || error}); no value was typed.`,
+        };
+      }
+      if (!setup.ok) {
+        onStep("real_autofill_bank_profit_row_setup_failed", setup.message);
+        const rowStatus = ["row_missing_dry", "row_missing_verify_only"].includes(setup.status)
+          ? irisRowFiller.FILL_STATUS.ROW_NOT_FOUND
+          : irisRowFiller.FILL_STATUS.UNVERIFIED_TARGET;
+        results = results.concat(
+          group.fields.map((field) => ({
+            ...field,
+            status: rowStatus,
+            sectionId: group.sectionId,
+            sectionStatus: setup.status,
+            setupStatus: setup.status,
+          })),
+        );
+        if (stopOnProblem) stopped = true;
+        continue;
+      }
+      // The section navigator proved the Other Sources / Final Tax panel. The
+      // dedicated driver then verified the exact category parent/detail pair,
+      // headings and writable child inputs before any amount can be filled.
+      sectionVerified = true;
+    }
     if (mode !== "dry" && isBusinessGroup) {
       readiness = await irisNavigation.waitForBusinessSectionReady(windowInstance, {
         sectionId: group.sectionId, taxYear, taxpayerIdentifier, onStep,

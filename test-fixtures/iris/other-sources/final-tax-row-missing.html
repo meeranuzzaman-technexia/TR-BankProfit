@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head><meta charset="utf-8"><title>IRIS Other Sources - Final Tax</title></head>
+  <body>
+    <app-nitr-wf-body>
+      <div class="body interface_21 active">
+        <mat-expansion-panel class="mat-expanded">
+          <mat-expansion-panel-header aria-expanded="true">
+            <mat-panel-title>Other Sources</mat-panel-title>
+          </mat-expansion-panel-header>
+          <div class="mat-expansion-panel-content">
+            <button class="data-tab-left-btn active">Tax Deductions</button>
+            <div class="wf-section-modal-accordion">
+              <mat-expansion-panel class="mat-expanded">
+                <mat-expansion-panel-header aria-expanded="true">
+                  <mat-panel-title>Final Tax</mat-panel-title>
+                </mat-expansion-panel-header>
+                <div class="mat-expansion-panel-content">
+                  <div class="mat-expansion-panel-body">
+                    <div class="heading-bar">
+                      <strong>Description</strong><strong>Code</strong>
+                      <strong>Taxable Amount</strong><strong>Tax Deducted</strong>
+                      <strong>Tax Chargeable</strong>
+                    </div>
+                    <div class="dataRow form-head" id="999919">
+                      <span class="row-description-text">Final Tax</span>
+                    </div>
+                    <!-- 64040052 is intentionally absent in this capture fixture. -->
+                    <button class="btn-section-add" type="button">+ Section</button>
+                  </div>
+                </div>
+              </mat-expansion-panel>
+            </div>
+          </div>
+        </mat-expansion-panel>
+      </div>
+    </app-nitr-wf-body>
+    <button id="save">Save</button>
+    <button id="calculate">Calculate</button>
+    <button id="submit">Submit</button>
+  </body>
+</html>

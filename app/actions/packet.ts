@@ -624,9 +624,23 @@ export async function generateFilingPacketAction(
           error: `Bank-statement profit (PKR ${statementGrossProfit.toLocaleString("en-PK")}) does not match the approved certificate gross (PKR ${approved.grossAnnualProfit.toLocaleString("en-PK")}). Reconcile them before IRIS entry.`,
         };
       }
+      const investment = approved.instrumentCategory.trim();
+      if (investment.length > 50) {
+        return {
+          success: false,
+          error:
+            "The approved Bank Profit instrument/category is longer than the 50 characters accepted by IRIS. Shorten it to the certificate's concise printed category and approve it again.",
+        };
+      }
       bankProfitSource = {
         documentId: bankProfitCertificate.id,
         subcategory: calculationLine.subcategory as BankProfitSubcategory,
+        investment,
+        contents: [
+          `1. ${approved.iban || approved.accountNumber}`,
+          `2. ${approved.instrumentCategory.trim()}`,
+          `3. ${approved.bankName.trim()}`,
+        ].join("\n"),
         statementGrossProfit,
         taxDeducted: approved.taxDeducted,
         taxChargeable: toMoneyNumber(calculationLine.calculatedTax),

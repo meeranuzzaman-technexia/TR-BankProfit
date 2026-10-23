@@ -46,7 +46,7 @@ const DESCRIPTION_SELECTOR = ".row-description-text";
  * a stale copy is a correctness risk, not a cosmetic one — main.js refuses to run
  * the real-portal flow when the three files disagree.
  */
-const BUILD_TAG = "fix52-computed-surcharge-readback-20261020";
+const BUILD_TAG = "fix60-bank-profit-category-routing-20261023";
 
 /** Outcome reason codes. `filled` is the only success. */
 const FILL_STATUS = {

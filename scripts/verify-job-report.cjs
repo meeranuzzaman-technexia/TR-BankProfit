@@ -241,6 +241,22 @@ test("attention message: plain words, grouped by cause, no status codes", () => 
   assert.equal(buildAttentionMessage([{ irisCode: "1009", status: "filled" }]).itemCount, 0);
 });
 
+test("attention message: an unsafe Final Tax selection explains why Bank Profit was not added", () => {
+  const { buildAttentionMessage } = require("../electron-connect/job-report.js");
+  const out = buildAttentionMessage([
+    {
+      irisCode: "64040052",
+      label: "Profit on Debt u/s 151(1)(b) from Bank Accounts / Deposits",
+      status: "unverified_target",
+      setupStatus: "unexpected_sources_selected",
+      value: "45000",
+    },
+  ]);
+  assert.match(out.text, /Other Final Tax sources were selected/);
+  assert.match(out.text, /Deselect unrelated sources/);
+  assert.doesNotMatch(out.text, /unexpected_sources_selected|unverified_target/);
+});
+
 test("attention message: every status the row filler and the wealth driver can report has a plain sentence", () => {
   const { buildAttentionMessage } = require("../electron-connect/job-report.js");
   const filler = require("../electron-connect/iris-row-filler.js");
@@ -294,7 +310,7 @@ test("attention panel: the job list passes only plain text, and the page shows t
   const client = read("components/tax/fbr-connect-client.tsx");
   assert.match(client, /<FbrAttentionPanel attention=\{activeJob\.attention\} \/>/);
   assert.match(client, /activeJob\.pauseAction === "portal_autofill_review" &&\s+activeJob\.attention/);
-  assert.match(read("components/tax/fbr-attention-panel.tsx"), /What to do: /);
+  assert.match(read("components/tax/fbr-attention-panel.tsx"), /What to do:\{" "\}/);
   const main = read("electron-connect/main.js");
   assert.match(main, /attention: attentionReport,/);
   assert.match(main, /attention: reviewRequired \? autofill\?\.result\?\.attention \|\| null : null/);

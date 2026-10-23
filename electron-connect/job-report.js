@@ -360,6 +360,52 @@ function attentionReason(r) {
       what: "IRIS did not recognise this IBAN.",
       todo: "IRIS only accepts accounts it knows. Either correct the IBAN in TaxRocket (check it against your bank statement) and start the filing again, or add the account yourself under Personal Assets > Bank Account(s) with an IBAN IRIS accepts. The agent then checks the bank, the place and the amount, and reports the IBAN it finds.",
     };
+  if (["64040052", "64040053", "64040054", "64330054", "64330055", "64330056"].includes(String(r.irisCode || "")) && setup) {
+    if (["unexpected_sources_selected", "unexpected_sources_selected_after_bank_profit", "unexpected_sources_selected_before_add"].includes(setup))
+      return {
+        what: "Other Final Tax sources were selected, so the agent cancelled the chooser instead of adding unrelated rows.",
+        todo: "Review Other Sources > Tax Deductions > Final Tax. Deselect unrelated sources, then retry; if you need those other rows, add them separately yourself.",
+      };
+    if (["bank_profit_option_missing", "bank_profit_option_ambiguous"].includes(setup))
+      return {
+        what: "IRIS did not show one unique Bank Profit option in Add Final Tax; no row was added.",
+        todo: "Check Other Sources > Tax Deductions > Final Tax and enter the figures only in the verified Bank Profit row.",
+      };
+    if (setup === "bank_profit_option_locked")
+      return {
+        what: "IRIS showed the Bank Profit option as disabled while its row was absent; the agent did not press ADD.",
+        todo: "Check the Final Tax section in IRIS. If the row is still absent, add the Bank Profit row manually and verify its three editable cells before entering figures.",
+      };
+    if (["add_button_disabled", "add_button_disabled_before_add"].includes(setup))
+      return {
+        what: "The Add Final Tax button was not enabled, so the Bank Profit row was not added.",
+        todo: "Check the Final Tax section in IRIS; retry only when the exact Bank Profit option is the sole checked source and ADD is enabled.",
+      };
+    if (setup === "row_missing_dry")
+      return {
+        what: "This was a read-only run and the Bank Profit row is absent; no row was added.",
+        todo: "A live run can add it only after confirming the exact Bank Profit option is the sole checked source and the three editable cells appear.",
+      };
+    if (setup === "row_missing_verify_only")
+      return {
+        what: "The Bank Profit row is absent, but this item was marked read-only, so the agent did not add it.",
+        todo: "If the item was already handled, keep it read-only and check IRIS. Otherwise remove that acknowledgement and rerun, or add the row manually.",
+      };
+    if (setup === "row_not_created_after_add")
+      return {
+        what: "The chooser closed, but the agent could not verify the new Bank Profit row; it stopped before typing any amount.",
+        todo: "Check whether the row is already present before trying again; do not add it twice. If present, verify the three writable cells before entering figures.",
+      };
+    if (["row_layout_unverified", "row_changed_before_add"].includes(setup))
+      return {
+        what: "IRIS showed an unverified or changing Bank Profit row, so the agent refused to add a duplicate or type into it.",
+        todo: "Inspect Other Sources > Tax Deductions > Final Tax and confirm there is one Bank Profit parent/detail pair with three writable cells.",
+      };
+    return {
+      what: "The Bank Profit Final Tax grid or chooser could not be verified, so the agent did not type these figures.",
+      todo: "Check Other Sources > Tax Deductions > Final Tax, close any pop-up, and verify the Bank Profit row before retrying.",
+    };
+  }
   if (setup === "unexpected_dialog_open")
     return {
       what: "A pop-up was already open in IRIS.",

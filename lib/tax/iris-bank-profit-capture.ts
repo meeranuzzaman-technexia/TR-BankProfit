@@ -10,43 +10,43 @@ export type BankProfitSubcategory =
 
 /** TY2026 Other Sources -> Tax Deductions -> Final Tax capture contract. */
 export const BANK_PROFIT_FINAL_TAX_ROWS: Readonly<
-  Record<BankProfitSubcategory, { code: string; description: string; stableWriteableChildCaptured: boolean }>
+  Record<BankProfitSubcategory, { code: string; description: string; writableDetailCreationVerified: boolean }>
 > = {
   "bank-or-financial-institution-deposit": {
     code: "64040052",
     description: "Profit on Debt u/s 151(1)(b) from Bank Accounts / Deposits",
-    stableWriteableChildCaptured: true,
+    writableDetailCreationVerified: true,
   },
   "government-securities-non-individual": {
     code: "64040053",
     description: "Profit on Debt u/s 151(1)(c) from Government Securities",
-    stableWriteableChildCaptured: false,
+    writableDetailCreationVerified: true,
   },
   "other-profit-on-debt": {
     code: "64040054",
-    description: "151(1)(d) - Profit on Debt u/s 151 from Others",
-    stableWriteableChildCaptured: false,
+    description: "151(1) (d) - Profit on Debt u/s 151 from Others",
+    writableDetailCreationVerified: true,
   },
   "sukuk-company": {
     code: "64330056",
     description: "Return on Investment in Sukuks u/s 151(1A) @ 25%",
-    stableWriteableChildCaptured: false,
+    writableDetailCreationVerified: true,
   },
   "sukuk-individual-aop-above-1m": {
     code: "64330055",
     description: "Return on Investment in Sukuks u/s 151(1A) @ 12.5%",
-    stableWriteableChildCaptured: false,
+    writableDetailCreationVerified: true,
   },
   "sukuk-individual-aop-below-1m": {
     code: "64330054",
     description: "Return on Investment in Sukuks u/s 151(1A) @ 10%",
-    stableWriteableChildCaptured: false,
+    writableDetailCreationVerified: true,
   },
 };
 
 export const BANK_PROFIT_WRITEABLE_CODES: ReadonlySet<string> = new Set(
   Object.values(BANK_PROFIT_FINAL_TAX_ROWS)
-    .filter((row) => row.stableWriteableChildCaptured)
+    .filter((row) => row.writableDetailCreationVerified)
     .map((row) => row.code),
 );
 
@@ -83,6 +83,10 @@ export function bankProfitSubcategoryFromCertificate(
 export type BankProfitPortalSource = {
   documentId: string;
   subcategory: BankProfitSubcategory;
+  /** Exact IRIS Investment modal value from the approved certificate. */
+  investment: string;
+  /** Account/instrument/institution lines requested by the IRIS modal. */
+  contents: string;
   /** Current calculation tax base, sourced from bank-statement ledger income. */
   statementGrossProfit: number;
   /** Actual withholding printed on the approved bank-profit certificate. */

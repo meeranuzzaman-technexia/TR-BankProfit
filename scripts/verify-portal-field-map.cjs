@@ -155,7 +155,7 @@ test("unmapped categories become a named gap, never 'Other Receipts' 5028", () =
   const bank = map.mappingGaps.unmappedCategories.find((g) => g.category === "BANK_PROFIT");
   check("with its amount", bank.totalAmount, 400000);
   check("with its source rows", bank.entryIds, ["b1"]);
-  assert.match(bank.reason, /final-tax/i, "and a reason that says why");
+  assert.match(bank.reason, /final[\s-]*tax/i, "and a reason that says why");
 });
 
 test("approved bank profit maps statement gross, certificate WHT and calculated final tax to the captured child row", () => {
@@ -167,6 +167,8 @@ test("approved bank profit maps statement gross, certificate WHT and calculated 
       bankProfitSource: {
         documentId: "certificate-1",
         subcategory: "bank-or-financial-institution-deposit",
+        investment: "Bank savings deposit",
+        contents: "1. PK00TEST0000000000000000\n2. Bank savings deposit\n3. Test Bank Limited",
         statementGrossProfit: 45000,
         taxDeducted: 9000,
         taxChargeable: 9000,
@@ -186,30 +188,37 @@ test("approved bank profit maps statement gross, certificate WHT and calculated 
   );
   check("bank route opens Other Sources", bank.every((field) => field.leftPanel === "Other Sources"), true);
   check("bank route opens Tax Deductions", bank.every((field) => field.leftSection === "Tax Deductions"), true);
+  check("bank investment detail reaches every amount field", bank.every((field) => field.bankProfitInvestment === "Bank savings deposit" && field.bankProfitContents.includes("Test Bank Limited")), true);
   check("statement ledger income is not left as a manual gap", map.mappingGaps.unmappedCategories.some((gap) => gap.category === "BANK_PROFIT"), false);
   check("gross appears once in total income", map.computationHints.totalIncome, 45000);
 });
 
-test("uncaptured bank-profit categories stay blocked instead of guessing a popup row", () => {
-  const { map, fields } = buildOver(
-    [
-      { id: "bp-1", entryType: "INCOME", category: "BANK_PROFIT", description: "Government security profit", amount: 45000 },
-    ],
-    {
-      bankProfitSource: {
-        documentId: "certificate-1",
-        subcategory: "government-securities-non-individual",
-        statementGrossProfit: 45000,
-        taxDeducted: 9000,
-        taxChargeable: 9000,
+test("every supported profit category maps to its exact Final Tax popup code", () => {
+  for (const [subcategory, code] of [
+    ["bank-or-financial-institution-deposit", "64040052"],
+    ["government-securities-non-individual", "64040053"],
+    ["other-profit-on-debt", "64040054"],
+    ["sukuk-company", "64330056"],
+    ["sukuk-individual-aop-above-1m", "64330055"],
+    ["sukuk-individual-aop-below-1m", "64330054"],
+  ]) {
+    const { map, fields } = buildOver(
+      [{ id: "bp-1", entryType: "INCOME", category: "BANK_PROFIT", description: subcategory, amount: 45000 }],
+      {
+        bankProfitSource: {
+          documentId: "certificate-1",
+          subcategory,
+          investment: subcategory,
+          contents: `1. Certificate\n2. ${subcategory}\n3. Test Institution`,
+          statementGrossProfit: 45000,
+          taxDeducted: 9000,
+          taxChargeable: 9000,
+        },
       },
-    },
-  );
-  check("no unproven government-security row is queued", fields.filter((field) => field.irisCode === "64040053").length, 0);
-  assert.match(
-    map.mappingGaps.unmappedCategories.find((gap) => gap.category === "BANK_PROFIT").reason,
-    /post-selection|child row|capture/i,
-  );
+    );
+    check(`${subcategory} queues three exact cells`, fields.filter((field) => field.irisCode === code).length, 3);
+    check(`${subcategory} is not left as a gap`, map.mappingGaps.unmappedCategories.some((gap) => gap.category === "BANK_PROFIT"), false);
+  }
 });
 
 test("a bare Section 151 credit cannot fall back to the old Adjustable Tax row", () => {
@@ -514,8 +523,8 @@ test("the map is versioned so an old packet cannot masquerade as a new one", () 
     taxpayerListStatus: "ATL",
     ledgerEntries: salaryOnlyLedger(1, 1000),
   });
-  check("packet map version", map.version, "1.2.0");
-  check("selector bundle stamp", map.selectorBundle.version, "v1.2-2026-10-21-bank-profit-capture");
+  check("packet map version", map.version, "1.3.0");
+  check("selector bundle stamp", map.selectorBundle.version, "v1.3-2026-10-23-bank-profit-investment");
 });
 
 test("the agent's completion status and the app's gate agree (no invented 'COMPLETED')", () => {
@@ -675,14 +684,16 @@ test("an unmapped income category blocks packet generation (never a silent omiss
     /const coverage = business\s*\?\s*\{\s*\.\.\.coverageGate\.coverage,[\s\S]*mode: "partial_manual_entry_required"/,
     "business-specific coverage extends the shared coverage verdict instead of recreating its gaps/refusal wording",
   );
-  const refusalAt = body.indexOf("return {\n        success: false,\n        error: coverageGate.refusal");
+  const refusalAt = body.search(
+    /return\s*\{\s*success:\s*false,\s*error:\s*coverageGate\.refusal/,
+  );
   assert.notEqual(refusalAt, -1, "the refusal must exist before anything is stored");
   check(
     "the refusal precedes the snapshot it would otherwise store",
     refusalAt < body.indexOf("const snapshot = {"),
     true,
   );
-  assert.match(body, /coverage,\n    \};/, "the snapshot records the coverage verdict");
+  assert.match(body, /coverage,\r?\n    \};/, "the snapshot records the coverage verdict");
 
   // The client cannot accept by accident: a click event is not `true`.
   const hook = fs.readFileSync(
