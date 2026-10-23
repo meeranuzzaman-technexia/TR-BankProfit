@@ -4500,10 +4500,19 @@ async function runRealIrisAutofill(jobContext, job, mode) {
     // that draft clean.
     try {
       const snapshot = await irisRowFiller.snapshotIrisRows(windowInstance);
-      const unexpected = irisRowFiller.findUnexpectedPrefill(
-        snapshot,
-        group.fields.map((field) => field.irisCode),
-      );
+      const unexpected = irisRowFiller
+        .findUnexpectedPrefill(
+          snapshot,
+          group.fields.map((field) => field.irisCode),
+        )
+        // Other supported profit categories are independent Final Tax rows.
+        .filter(
+          (row) =>
+            !isBankProfitFinalTaxGroup ||
+            !irisBankProfitRowDriver.BANK_PROFIT_CODES.includes(
+              String(row.code || "").trim(),
+            ),
+        );
       onStep(
         "real_autofill_prefill_snapshot",
         `${group.sectionId}: ${snapshot.length} row(s) read, ${unexpected.length} unexpected pre-filled row(s).`,

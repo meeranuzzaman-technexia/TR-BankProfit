@@ -2228,7 +2228,7 @@ test("Bank Profit ignores a filled non-target category but still blocks a filled
     status: filler.FILL_STATUS.FILLED,
   }).runRealIrisAutofill(packet, { id: "bank-profit-non-target", type: "tax_assisted_filing" }, "live");
   assert.equal(nonTargetFilled.paused, false);
-  assert.deepEqual(nonTargetFilled.result.unexpectedPrefill, []);
+  assert.equal(nonTargetFilled.result.unexpectedPrefill.length, 0);
 
   const targetFilled = await makeCtx({
     snapshot: [{ code: "64040053", description: "Government Securities", cells: [{ editable: true, value: "2465" }] }],
